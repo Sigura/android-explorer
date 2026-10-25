@@ -1,0 +1,5 @@
+# Baseline Profile (README §8): precompile the app's own code for fast cold start and smooth
+# scrolling. Compose, Coil and Media3 ship their own profiles, merged by the build.
+# A generated profile (Macrobenchmark on a device) can replace these broad rules later.
+HSPLcom/mediaviewer/**->**(**)**
+Lcom/mediaviewer/**;

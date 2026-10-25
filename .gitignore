@@ -1,0 +1,50 @@
+# ── APK / App Bundle ────────────────────────────────────────────────────────
+# *.apk
+*.aab
+*.ap_
+*.aab_
+
+# ── Gradle ───────────────────────────────────────────────────────────────────
+.gradle/
+build/
+.kotlin/
+*.log
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# ── Local configuration ─────────────────────────────────────────────────────
+local.properties
+
+# ── Keystore files ──────────────────────────────────────────────────────────
+*.jks
+*.keystore
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+.navigation/
+.vscode/
+
+# ── Android captures / native build ─────────────────────────────────────────
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Misc / Temporary files ──────────────────────────────────────────────────
+*.orig
+*.bak
+*.swp
+*~
+*.hprof
+*.pcap
+*.tmp
+*.temp
+
+# Built APKs
+release/
