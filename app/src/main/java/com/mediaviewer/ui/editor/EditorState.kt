@@ -71,6 +71,10 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
     var query by mutableStateOf("")
     var matchCase by mutableStateOf(false)
 
+    /** The replace row under the find field (`Ctrl` + H); never for read-only files. */
+    var replaceOpen by mutableStateOf(false)
+    var replacement by mutableStateOf("")
+
     /** Start offsets of the matches in the current text (computed off the main thread by the screen). */
     var matches by mutableStateOf(IntArray(0))
         private set
@@ -93,18 +97,59 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
         findOpen = true
     }
 
+    /** `Ctrl` + H: find with the replace row. */
+    fun openReplace() {
+        if (doc.readOnly) return openFind()
+        openFind()
+        replaceOpen = true
+    }
+
+    /**
+     * Replaces the current match and moves on to the next one (the matches are found again once
+     * the text settles). One undo step.
+     */
+    fun replaceCurrent() {
+        if (doc.readOnly) return
+        val start = matches.getOrNull(current) ?: return findNext()
+        val end = start + query.length
+        val text = value.text
+        // The text may have changed since the matches were found: replace only a real match.
+        if (end > text.length || !text.regionMatches(start, query, 0, query.length, ignoreCase = !matchCase)) return
+        val caret = start + replacement.length
+        onValueChange(TextFieldValue(text.substring(0, start) + replacement + text.substring(end), TextRange(caret)))
+    }
+
+    /** Replaces every match (up to [TextSearch.LIMIT]) as one undo step; reports how many. */
+    fun replaceAll() {
+        if (doc.readOnly || query.isEmpty()) return
+        val text = value.text
+        val found = TextSearch.find(text, query, matchCase)
+        if (found.isEmpty()) return
+        val (out, caret) = TextSearch.replaceAll(text, found, query.length, replacement)
+        onValueChange(TextFieldValue(out, TextRange(caret)))
+        vm.errors.notify("Replaced ${found.size}${if (found.size >= TextSearch.LIMIT) "+ (run again for more)" else ""}", log = false)
+    }
+
     fun closeFind() {
+        searched = null
         findOpen = false
+        replaceOpen = false
         matches = IntArray(0)
         current = -1
     }
 
     /** New matches for the text or query: keeps the place, starting from the caret. */
+    /** The query and case the last matches were found for: only a new search moves the selection. */
+    private var searched: Pair<String, Boolean>? = null
+
     fun setMatches(found: IntArray, forText: String, forQuery: String) {
         if (forText != value.text || forQuery != query || !findOpen) return
         matches = found
         current = TextSearch.nearest(found, value.selection.min)
-        if (current >= 0) show(jump = false)
+        val search = forQuery to matchCase
+        // After an edit (same search) the selection stays where the user is typing.
+        if (search != searched && current >= 0) show(jump = false)
+        searched = search
     }
 
     fun findNext(forward: Boolean = true) {
@@ -116,6 +161,9 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
     /** Selects the current match (which scrolls it into view); read-only files scroll their list. */
     private fun show(jump: Boolean) {
         val start = matches[current]
+        // Matches lag the text and query by up to 100 ms: select only a range that still matches.
+        val text = if (doc.readOnly) doc.text else value.text
+        if (start + query.length > text.length || !text.regionMatches(start, query, 0, query.length, ignoreCase = !matchCase)) return
         if (!doc.readOnly) value = value.copy(selection = TextRange(start, start + query.length))
         if (jump || doc.readOnly) jumps++
     }
@@ -133,7 +181,9 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
         val from = File(old.path)
         val to = File(from.parentFile, name)
         vm.setBusy("Renaming ${old.name}…", onStop = {}) {
+            // A rename that outlived the watchdog may still have happened: look before calling it failed.
             val why = abandonable(AppViewModel.TEXT_IO_TIMEOUT_MS) { TextFile.rename(from, name) ?: "" }
+                ?: withContext(Dispatchers.IO) { if (!from.exists() && to.exists()) "" else null }
             when {
                 why == null -> onError("Renaming took too long")
                 why.isNotEmpty() -> onError(why)

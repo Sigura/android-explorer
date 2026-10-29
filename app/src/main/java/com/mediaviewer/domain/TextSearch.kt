@@ -33,6 +33,23 @@ object TextSearch {
         else -> (current - 1 + count) % count
     }
 
+    /**
+     * [text] with each match ([starts], [length] long) replaced by [replacement], and the offset
+     * just after the last replacement (where the caret goes).
+     */
+    fun replaceAll(text: String, starts: IntArray, length: Int, replacement: String): Pair<String, Int> {
+        if (starts.isEmpty()) return text to 0
+        val out = StringBuilder(text.length + starts.size * maxOf(0, replacement.length - length))
+        var at = 0
+        for (m in starts) {
+            out.append(text, at, m).append(replacement)
+            at = m + length
+        }
+        val caret = out.length
+        out.append(text, at, text.length)
+        return out.toString() to caret
+    }
+
     /** Offsets where each line starts (line 0 at 0), for mapping a match to its line. */
     fun lineStarts(text: String): IntArray {
         var n = 1

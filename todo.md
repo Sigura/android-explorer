@@ -279,7 +279,7 @@ Done 2026-10-25, not yet tried on a device. Decisions are in README §6.
 
 Still open:
 
-- **Replace** (find is done, §10.6).
+- ~~Replace~~ — done 2026-10-29 (README §2 Text editor).
 - **Read-only files** (1–10 MB) always wrap: the line list has no sideways scroll.
 - **Verify on a device:** typing speed in a 1 MB file (the text field lays out the whole text on each change), colouring speed near the 200 K limit, the keyboard over the text, pinch next to text selection, `Tab` / `Esc` on DeX keyboards, the safe save on FAT / exFAT through FUSE, and whether breadcrumbs fit at 360 dp with the phone ⋮ menu.
 

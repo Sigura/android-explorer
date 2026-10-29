@@ -11,6 +11,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Search
@@ -52,7 +54,8 @@ import com.mediaviewer.ui.common.TipIconButton
 
 /**
  * The find bar under the editor's top bar (todo §10.6): query, `3 / 17`, previous / next,
- * *Match case* and close. `Enter` / `Shift` + `Enter` step through the matches, `Esc` closes.
+ * *Match case* and close; ⌄ (or `Ctrl` + H) shows the replace row. `Enter` / `Shift` + `Enter`
+ * step through the matches, `Esc` closes.
  */
 @Composable
 internal fun FindBar(state: EditorState, focus: FocusRequester) {
@@ -68,8 +71,17 @@ internal fun FindBar(state: EditorState, focus: FocusRequester) {
     val count = state.matches.size
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Column {
-            Row(Modifier.height(44.dp).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.height(44.dp).padding(start = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (state.doc.readOnly) {
+                    Icon(Icons.Rounded.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
+                } else {
+                    TipIconButton(if (state.replaceOpen) "Hide replace" else "Replace (Ctrl+H)", onClick = { state.replaceOpen = !state.replaceOpen }) {
+                        Icon(
+                            if (state.replaceOpen) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            contentDescription = if (state.replaceOpen) "Hide replace" else "Show replace",
+                        )
+                    }
+                }
                 BasicTextField(
                     value = field,
                     onValueChange = {
@@ -125,8 +137,37 @@ internal fun FindBar(state: EditorState, focus: FocusRequester) {
                     Icon(Icons.Rounded.Close, contentDescription = "Close find")
                 }
             }
+            if (state.replaceOpen && !state.doc.readOnly) ReplaceRow(state, count)
             HorizontalDivider()
         }
+    }
+}
+
+/** Replace with: the current match (then on to the next), or all of them as one undo step. */
+@Composable
+private fun ReplaceRow(state: EditorState, count: Int) {
+    Row(Modifier.height(44.dp).padding(start = 52.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        BasicTextField(
+            value = state.replacement,
+            onValueChange = { state.replacement = it },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { state.replaceCurrent() }),
+            decorationBox = { inner ->
+                if (state.replacement.isEmpty()) Text("Replace with", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                inner()
+            },
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 8.dp)
+                .onPreviewKeyEvent { ev ->
+                    if (ev.type == KeyEventType.KeyDown && (ev.key == Key.Enter || ev.key == Key.NumPadEnter)) state.replaceCurrent().let { true } else false
+                },
+        )
+        TextButton(onClick = state::replaceCurrent, enabled = count > 0) { Text("Replace") }
+        TextButton(onClick = state::replaceAll, enabled = count > 0) { Text("All") }
     }
 }
 

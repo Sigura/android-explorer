@@ -80,7 +80,7 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Text size (slider, pinch, `Ctrl` + wheel, `Ctrl` + `+` / `-`) and line wrap, kept between runs                                      | ✅     |
 | Code in JetBrains Mono (bundled, no ligatures; the system font as an option); also in code and log previews on tiles                | ✅     |
 | Files of 1–10 MB open read-only; larger ones open with other apps                                                                   | ✅     |
-| Find (`Ctrl` + F) with match case and all matches marked; rename from the editor (tap the name, `F2`)                               | ✅     |
+| Find (`Ctrl` + F) with match case and all matches marked, replace (`Ctrl` + H); rename from the editor (tap the name, `F2`)                               | ✅     |
 
 ### Slideshow
 
@@ -205,6 +205,7 @@ The bar shows the name (`•` when changed), the language, the encoding and `CRL
 | Wrap lines on / off     | ⋮                           | —                                             |
 | Save in UTF-8           | ⋮ (for legacy charsets)     | —                                             |
 | Find                    | 🔍                          | `Ctrl` + F; next / previous: `Enter` / `Shift` + `Enter`, `F3` / `Shift` + `F3`; close: Esc |
+| Replace                 | ⌄ in the find bar           | `Ctrl` + H; `Enter` in the replace field replaces and moves on |
 | Rename                  | Tap the name, ⋮ → Rename…   | `F2`                                          |
 | Back to the folder      | ←, Back                     | Esc                                           |
 
@@ -212,6 +213,7 @@ The bar shows the name (`•` when changed), the language, the encoding and `CRL
 - If the app is stopped with unsaved changes, they are kept; the next time the file is opened they come back, with *Discard* in a snackbar.
 - Back returns to the folder, scrolled to the file.
 - **Find** opens a bar under the top bar: the text to find (a selected word is taken as the query), `3 / 17`, *Aa* (match case), ↑ / ↓ and ✕. Every match is marked, the current one stronger; it is selected and scrolled into view. Plain text, case-insensitive by default, up to 10,000 matches. Read-only files scroll to the line.
+- **Replace** (⌄ in the find bar or `Ctrl` + H, not in read-only files): *Replace* changes the current match and moves to the next; *All* changes every match at once. Each is one undo step; a match is replaced only if the text there still matches.
 - **Rename** keeps the unsaved text, undo history and kept draft; the new extension changes the colours. An existing name is refused, never overwritten.
 
 ### Listening: books, albums and lectures
