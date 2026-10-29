@@ -237,4 +237,38 @@ class EditorTest {
         h.record("a", "a\n", 1, 1, 10)
         assertEquals("a", h.undo("a\n")!!.text)
     }
+
+    // ------------------------------------------------------------------ themes (todo §10.8)
+
+    @Test fun everyThemeColourReachesWcagAa() {
+        val failures = ArrayList<String>()
+        for (t in EditorThemes.PALETTES) {
+            fun check(what: String, c: Long) {
+                val r = Contrast.ratio(c, t.background)
+                if (r < 4.5) failures.add("${t.name} (${if (t.dark) "dark" else "light"}) $what %08X: %.2f".format(c, r))
+            }
+            check("text", t.text)
+            for (role in Role.entries) check(role.name, t.colour(role))
+        }
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    @Test fun contrastMatchesWcagExamples() {
+        assertEquals(21.0, Contrast.ratio(0xFF000000, 0xFFFFFFFF), 0.01)
+        assertEquals(1.0, Contrast.ratio(0xFF777777, 0xFF777777), 0.001)
+        // #767676 on white is the usual "just passes AA" grey.
+        assertEquals(4.54, Contrast.ratio(0xFF767676, 0xFFFFFFFF), 0.01)
+    }
+
+    @Test fun themesResolve() {
+        assertEquals(EditorThemes.DEFAULT_LIGHT, EditorThemes.resolve("", appDark = false))
+        assertEquals(EditorThemes.DEFAULT_DARK, EditorThemes.resolve("default", appDark = true))
+        assertEquals(EditorThemes.DEFAULT_DARK, EditorThemes.resolve("no-such-theme", appDark = true))
+        // A chosen theme stays as chosen, whatever the app's day / night.
+        assertEquals(EditorThemes.SOLARIZED_LIGHT, EditorThemes.resolve("solarized-light", appDark = true))
+        assertEquals(EditorThemes.MONOKAI, EditorThemes.resolve("monokai", appDark = false))
+        assertEquals(EditorThemes.PALETTES.size, EditorThemes.PALETTES.map { it.dark to it.id }.toSet().size)
+        assertEquals(9, EditorThemes.CHOICES.size)
+        assertTrue(EditorThemes.PALETTES.all { (it.dark) == (Contrast.luminance(it.background) < 0.2) })
+    }
 }

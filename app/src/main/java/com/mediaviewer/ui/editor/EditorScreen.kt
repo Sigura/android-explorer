@@ -1,6 +1,25 @@
 package com.mediaviewer.ui.editor
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.TextUnit
+import com.mediaviewer.domain.Brackets
+import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -14,7 +33,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,11 +55,14 @@ import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SpaceBar
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -68,7 +89,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -84,8 +104,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
@@ -101,7 +119,6 @@ import com.mediaviewer.data.fs.FileTypes
 import com.mediaviewer.data.fs.TextFile
 import com.mediaviewer.domain.Highlight
 import com.mediaviewer.domain.Language
-import com.mediaviewer.domain.Role
 import com.mediaviewer.domain.Spans
 import com.mediaviewer.domain.TextSearch
 import com.mediaviewer.domain.model.OtherKind
@@ -181,6 +198,8 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
     fun zoom(dir: Int) = vm.settingsStore.update { it.copy(editorTextSp = stepIn(EDITOR_TEXT_STEPS, it.editorTextSp, dir)) }
     val setTextSize: (Int) -> Unit = { sp -> vm.settingsStore.update { it.copy(editorTextSp = sp) } }
     val setWrap: (Boolean) -> Unit = { w -> vm.settingsStore.update { it.copy(editorWrap = w) } }
+    val colours = rememberEditorColours(settings.editorTheme)
+    var themeDialog by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         Modifier
@@ -233,26 +252,45 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
     ) {
         val compact = maxWidth < 600.dp
         Column(Modifier.fillMaxSize()) {
-            EditorBar(state, compact, settings.editorTextSp, settings.editorWrap, setTextSize, setWrap)
+            EditorBar(state, compact, settings.editorTextSp, settings.editorWrap, settings.editorLineNumbers, settings.editorWhitespace, setTextSize, setWrap) { item ->
+                when (item) {
+                    ViewItem.THEME -> themeDialog = true
+                    ViewItem.LINE_NUMBERS -> vm.settingsStore.update { it.copy(editorLineNumbers = !it.editorLineNumbers) }
+                    ViewItem.WHITESPACE -> vm.settingsStore.update { it.copy(editorWhitespace = !it.editorWhitespace) }
+                }
+            }
             if (state.findOpen) FindBar(state, findFocus)
             Box(
                 Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .imePadding()
+                    .background(colours.background)
                     .textSizeGestures(::zoom),
             ) {
                 val code = CodeFonts.family(settings.codeFontBundled)
-                if (state.doc.readOnly) ReadOnlyText(state, settings.editorTextSp, code) else EditText(state, settings.editorTextSp, settings.editorWrap, code)
+                val view = EditorView(colours, settings.editorLineNumbers, settings.editorWhitespace)
+                // A chosen theme's selection colours; *Default* keeps the app's.
+                CompositionLocalProvider(LocalTextSelectionColors provides (colours.selection ?: LocalTextSelectionColors.current)) {
+                    if (state.doc.readOnly) ReadOnlyText(state, settings.editorTextSp, code, view) else EditText(state, settings.editorTextSp, settings.editorWrap, code, view)
+                }
             }
         }
         Dialogs(state)
         if (state.renaming) RenameDialog(state)
+        if (themeDialog) {
+            EditorThemeDialog(
+                settings.editorTheme,
+                CodeFonts.family(settings.codeFontBundled),
+                onSelect = { id -> vm.settingsStore.update { it.copy(editorTheme = id) } },
+                onDismiss = { themeDialog = false },
+            )
+        }
     }
 }
 
 @Composable
-private fun textStyle(state: EditorState, sp: Int, code: FontFamily): TextStyle {
+private fun textStyle(state: EditorState, sp: Int, code: FontFamily, colour: Color): TextStyle {
     val name = state.doc.name
     val kind = FileTypes.byExtension(name)?.other ?: OtherKind.TEXT
     // The same rule as the previews (README §3.10): code, logs and tables in monospace.
@@ -261,51 +299,204 @@ private fun textStyle(state: EditorState, sp: Int, code: FontFamily): TextStyle 
         fontFamily = if (mono) code else FontFamily.Default,
         fontSize = sp.sp,
         lineHeight = 1.35.em,
-        color = MaterialTheme.colorScheme.onBackground,
+        color = colour,
     )
 }
 
+/** What the text area shows besides the text (todo §10.8): theme, line numbers, whitespace marks. */
+private class EditorView(val colours: EditorColours, val lineNumbers: Boolean, val whitespace: Boolean)
+
+/** The view entries of the ⋮ menu. */
+private enum class ViewItem { THEME, LINE_NUMBERS, WHITESPACE }
+
+/** Text padding inside the editor area; line numbers and marks are drawn relative to it. */
+private val PAD_X = 12.dp
+private val PAD_Y = 8.dp
+
 @Composable
-private fun EditText(state: EditorState, sp: Int, wrap: Boolean, code: FontFamily) {
-    val styles = rememberStyles()
-    val found = rememberFoundStyles()
+private fun EditText(state: EditorState, sp: Int, wrap: Boolean, code: FontFamily, view: EditorView) {
+    val colours = view.colours
     val marks = if (state.findOpen) state.matches else NO_MATCHES
-    val transformation = remember(state.spans, styles, marks, state.current, state.query.length) {
-        SpanTransformation(state.spans, styles, Marks(marks, state.query.length, state.current, found))
+    val value = state.value
+    // Matching bracket (todo §10.8): also over the colour limit, where spans are empty.
+    val markup = state.language == Language.HTML || state.language == Language.XML
+    val bracket = remember(value.text, value.selection, state.spans, markup) {
+        if (value.selection.collapsed) Brackets.match(value.text, value.selection.start, state.spans, markup) else null
+    }
+    val transformation = remember(state.spans, colours, marks, state.current, state.query.length, bracket) {
+        SpanTransformation(state.spans, colours.styles, Marks(marks, state.query.length, state.current, colours.found), bracket, colours.bracket)
     }
     val prose = state.language == Language.PLAIN || state.language == Language.MARKDOWN
-    val style = textStyle(state, sp, code)
-    val field = @Composable { modifier: Modifier ->
-        BasicTextField(
-            value = state.value,
-            onValueChange = state::onValueChange,
-            textStyle = style,
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            visualTransformation = transformation,
-            // Prose gets the keyboard's help; code doesn't want "corrected" words.
-            keyboardOptions = KeyboardOptions(
-                capitalization = if (prose) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
-                autoCorrectEnabled = prose,
-            ),
-            modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-        )
-    }
-    if (wrap) {
-        field(Modifier.fillMaxSize())
-    } else {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val width = maxWidth
-            Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
-                field(Modifier.widthIn(min = width).fillMaxHeight())
+    val style = textStyle(state, sp, code, colours.text)
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val scrollV = rememberScrollState()
+    val scrollH = rememberScrollState()
+    val density = LocalDensity.current
+    val padX = with(density) { PAD_X.toPx() }
+    val padY = with(density) { PAD_Y.toPx() }
+    // Line numbers are measured while drawing: a cache for a screenful of them.
+    val measurer = rememberTextMeasurer(cacheSize = 128)
+    val gap = with(density) { GUTTER_GAP.toPx() }
+    val markStyle = style.copy(color = colours.gutter, lineHeight = TextUnit.Unspecified)
+    // Line starts for the gutter numbers; a linear pass per edit, only with numbers on (verify: 1 MB).
+    val lineStarts = remember(value.text, view.lineNumbers) { if (view.lineNumbers) TextSearch.lineStarts(value.text) else NO_MATCHES }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val viewport = constraints.maxHeight
+        val viewportW = constraints.maxWidth
+        val width = maxWidth
+        val minHeight = maxHeight
+
+        // The field is as tall as its text and the outer column scrolls, so the current line,
+        // numbers and marks can be drawn from the layout in the same coordinates. The cursor is
+        // kept in view here (typing, arrows, find), since the field no longer scrolls itself.
+        LaunchedEffect(value.selection, value.text, viewport) {
+            val l = snapshotFlow { layout }.first { it != null && it.layoutInput.text.length == value.text.length }!!
+            val r = l.getCursorRect(value.selection.end.coerceIn(0, value.text.length))
+            val top = (padY + r.top).toInt()
+            val bottom = (padY + r.bottom + padY).toInt()
+            if (top < scrollV.value) scrollV.scrollTo(top) else if (bottom > scrollV.value + viewport) scrollV.scrollTo(bottom - viewport)
+            if (!wrap) {
+                val gutter = if (view.lineNumbers) gutterWidth(measurer, markStyle, lineStarts.size, gap) else 0
+                val left = r.left.toInt()
+                val right = (padX + r.right + 2 * padX).toInt()
+                val visible = viewportW - gutter
+                if (left < scrollH.value) scrollH.scrollTo(left.coerceAtLeast(0)) else if (right > scrollH.value + visible) scrollH.scrollTo(right - visible)
+            }
+        }
+
+        val gutterPx = if (view.lineNumbers) gutterWidth(measurer, markStyle, lineStarts.size, gap) else 0
+        Row(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollV)
+                .drawBehind {
+                    if (!view.lineNumbers) return@drawBehind
+                    val l = layout?.takeIf { it.layoutInput.text.length == value.text.length } ?: return@drawBehind
+                    drawLineNumbers(l, value.text, lineStarts, scrollV.value, viewport, padY, gutterPx - gap / 2, measurer, markStyle, colours.text, value.selection.end)
+                },
+        ) {
+            if (view.lineNumbers) Spacer(Modifier.width(with(density) { gutterPx.toDp() }))
+            Box(if (wrap) Modifier.weight(1f) else Modifier.weight(1f).horizontalScroll(scrollH)) {
+                BasicTextField(
+                    value = value,
+                    onValueChange = state::onValueChange,
+                    textStyle = style,
+                    cursorBrush = SolidColor(colours.cursor),
+                    visualTransformation = transformation,
+                    onTextLayout = { layout = it },
+                    // Prose gets the keyboard's help; code doesn't want "corrected" words.
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = if (prose) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
+                        autoCorrectEnabled = prose,
+                    ),
+                    modifier = (if (wrap) Modifier.fillMaxWidth() else Modifier.widthIn(min = width - with(density) { gutterPx.toDp() }))
+                        .heightIn(min = minHeight)
+                        .drawBehind {
+                            val l = layout?.takeIf { it.layoutInput.text.length == value.text.length } ?: return@drawBehind
+                            if (value.selection.collapsed) drawCurrentLine(l, value.text, value.selection.end, padY, colours.currentLine)
+                            if (view.whitespace) drawWhitespace(l, value.text, scrollV.value, viewport, padX, padY, measurer, markStyle)
+                        }
+                        .padding(horizontal = PAD_X, vertical = PAD_Y),
+                )
             }
         }
     }
 }
 
+/** Gutter width in px for [lines] lines: the digits of the last number plus [gap] px. */
+private fun gutterWidth(measurer: TextMeasurer, style: TextStyle, lines: Int, gap: Float): Int {
+    val digits = maxOf(2, lines.toString().length)
+    return measurer.measure("0".repeat(digits), style).size.width + gap.toInt()
+}
+
+/** Space around the line numbers: half before the text, half at the gutter's left. */
+private val GUTTER_GAP = 16.dp
+
+/** The background of the cursor's line (all its wrapped rows), across the field. */
+private fun DrawScope.drawCurrentLine(l: TextLayoutResult, text: String, caret: Int, padY: Float, colour: Color) {
+    val c = caret.coerceIn(0, text.length)
+    val start = text.lastIndexOf('\n', c - 1) + 1
+    val end = text.indexOf('\n', c).let { if (it < 0) text.length else it }
+    val top = l.getLineTop(l.getLineForOffset(start))
+    val bottom = l.getLineBottom(l.getLineForOffset(end))
+    drawRect(colour, Offset(0f, padY + top), Size(size.width, bottom - top))
+}
+
+/** The rows of [l] that are on screen, by the outer scroll position. */
+private fun visibleRows(l: TextLayoutResult, scrollY: Int, viewport: Int, padY: Float): IntRange {
+    val first = l.getLineForVerticalPosition((scrollY - padY).coerceAtLeast(0f))
+    val last = l.getLineForVerticalPosition(scrollY + viewport - padY)
+    return first..last
+}
+
+/** Numbers at the first row of each line on screen, right-aligned; the cursor's line in the text colour. */
+private fun DrawScope.drawLineNumbers(
+    l: TextLayoutResult,
+    text: String,
+    starts: IntArray,
+    scrollY: Int,
+    viewport: Int,
+    padY: Float,
+    right: Float,
+    measurer: TextMeasurer,
+    style: TextStyle,
+    currentColour: Color,
+    caret: Int,
+) {
+    if (starts.isEmpty()) return
+    val current = TextSearch.lineOf(starts, caret.coerceIn(0, text.length))
+    for (row in visibleRows(l, scrollY, viewport, padY)) {
+        val s = l.getLineStart(row)
+        if (s != 0 && text.getOrNull(s - 1) != '\n') continue
+        val line = TextSearch.lineOf(starts, s)
+        val number = measurer.measure((line + 1).toString(), if (line == current) style.copy(color = currentColour) else style)
+        val y = padY + l.getLineBaseline(row) - number.firstBaseline
+        drawText(number, topLeft = Offset(right - number.size.width, y))
+    }
+}
+
+/** Tabs as `→` and trailing spaces as `·`, on the rows on screen (todo §10.8). */
+private fun DrawScope.drawWhitespace(
+    l: TextLayoutResult,
+    text: String,
+    scrollY: Int,
+    viewport: Int,
+    padX: Float,
+    padY: Float,
+    measurer: TextMeasurer,
+    style: TextStyle,
+) {
+    val rows = visibleRows(l, scrollY, viewport, padY)
+    val from = l.getLineStart(rows.first)
+    val to = l.getLineEnd(rows.last)
+    val arrow = measurer.measure("→", style)
+    val dot = measurer.measure("·", style)
+    fun mark(at: Int, m: TextLayoutResult) {
+        val box = l.getBoundingBox(at)
+        drawText(m, topLeft = Offset(padX + box.center.x - m.size.width / 2f, padY + box.center.y - m.size.height / 2f))
+    }
+    var i = from
+    while (i < to) {
+        when (text[i]) {
+            '\t' -> mark(i, arrow)
+            ' ' -> {
+                var j = i
+                while (j < text.length && text[j] == ' ') j++
+                if (j == text.length || text[j] == '\n' || text[j] == '\r') for (k in i until minOf(j, to)) mark(k, dot)
+                i = j
+                continue
+            }
+        }
+        i++
+    }
+}
+
 /** Files from 1 to 10 MB: shown line by line, which stays fast where a text field would not. */
 @Composable
-private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily) {
-    val style = textStyle(state, sp, code)
+private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily, view: EditorView) {
+    val colours = view.colours
+    val style = textStyle(state, sp, code, colours.text)
     // Lines and where each starts (for find), both off the main thread: up to 10 MB.
     val split by produceState(emptyList<String>() to IntArray(0), state.doc) {
         value = withContext(Dispatchers.Default) { state.doc.text.split('\n') to TextSearch.lineStarts(state.doc.text) }
@@ -317,16 +508,27 @@ private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily) {
         val m = state.matches.getOrNull(state.current) ?: return@LaunchedEffect
         if (lines.isNotEmpty()) list.scrollToItem((TextSearch.lineOf(starts, m) - 3).coerceAtLeast(0))
     }
-    val found = rememberFoundStyles()
-    val marks = Marks(if (state.findOpen) state.matches else NO_MATCHES, state.query.length, state.current, found)
+    val marks = Marks(if (state.findOpen) state.matches else NO_MATCHES, state.query.length, state.current, colours.found)
+    val numberStyle = style.copy(color = colours.gutter, textAlign = TextAlign.End)
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val gutter = with(density) { gutterWidth(measurer, numberStyle, lines.size, GUTTER_GAP.toPx()).toDp() }
     LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
         itemsIndexed(lines) { i, line ->
-            if (marks.starts.isEmpty() || i >= starts.size) {
-                Text(line, style = style)
+            val text = if (marks.starts.isEmpty() || i >= starts.size) {
+                AnnotatedString(line)
             } else {
                 val b = AnnotatedString.Builder(line)
                 marks.addTo(b, starts[i], starts[i] + line.length)
-                Text(b.toAnnotatedString(), style = style)
+                b.toAnnotatedString()
+            }
+            if (view.lineNumbers) {
+                Row {
+                    Text("${i + 1}", style = numberStyle, modifier = Modifier.width(gutter).padding(end = GUTTER_GAP / 2))
+                    Text(text, style = style)
+                }
+            } else {
+                Text(text, style = style)
             }
         }
     }
@@ -338,8 +540,11 @@ private fun EditorBar(
     compact: Boolean,
     textSp: Int,
     wrap: Boolean,
+    lineNumbers: Boolean,
+    whitespace: Boolean,
     onTextSize: (Int) -> Unit,
     onWrap: (Boolean) -> Unit,
+    onView: (ViewItem) -> Unit,
 ) {
     val doc = state.doc
     val readOnly = doc.readOnly
@@ -421,6 +626,28 @@ private fun EditorBar(
                             onClick = { onWrap(!wrap) },
                         )
                     }
+                    DropdownMenuItem(
+                        text = { Text("Line numbers") },
+                        leadingIcon = { Icon(Icons.Rounded.FormatListNumbered, contentDescription = null) },
+                        trailingIcon = { Checkbox(checked = lineNumbers, onCheckedChange = null) },
+                        onClick = { onView(ViewItem.LINE_NUMBERS) },
+                    )
+                    if (!readOnly) {
+                        DropdownMenuItem(
+                            text = { Text("Show tabs and trailing spaces") },
+                            leadingIcon = { Icon(Icons.Rounded.SpaceBar, contentDescription = null) },
+                            trailingIcon = { Checkbox(checked = whitespace, onCheckedChange = null) },
+                            onClick = { onView(ViewItem.WHITESPACE) },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Theme…") },
+                        leadingIcon = { Icon(Icons.Rounded.Palette, contentDescription = null) },
+                        onClick = {
+                            menu = false
+                            onView(ViewItem.THEME)
+                        },
+                    )
                     if (!readOnly) {
                         DropdownMenuItem(
                             text = { Text("Rename…") },
@@ -502,15 +729,21 @@ private class SpanTransformation(
     private val spans: Spans,
     private val styles: Array<SpanStyle>,
     private val marks: Marks,
+    private val bracket: Brackets.Match?,
+    private val bracketStyle: SpanStyle,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
-        if (spans.size == 0 && marks.starts.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
+        if (spans.size == 0 && marks.starts.isEmpty() && bracket == null) return TransformedText(text, OffsetMapping.Identity)
         val n = text.length
         val b = AnnotatedString.Builder(text)
         for (i in 0 until spans.size) {
             val s = spans.start(i)
             val e = minOf(spans.end(i), n)
             if (s < e) b.addStyle(styles[spans.role(i).ordinal], s, e)
+        }
+        if (bracket != null && bracket.closeEnd <= n) {
+            b.addStyle(bracketStyle, bracket.openStart, bracket.openEnd)
+            b.addStyle(bracketStyle, bracket.closeStart, bracket.closeEnd)
         }
         marks.addTo(b, 0, n)
         return TransformedText(b.toAnnotatedString(), OffsetMapping.Identity)
@@ -531,42 +764,6 @@ private class Marks(val starts: IntArray, val length: Int, val current: Int, val
             if (s < e) b.addStyle(if (i == current) styles.second else styles.first, s - from, e - from)
             i++
         }
-    }
-}
-
-@Composable
-private fun rememberFoundStyles(): Pair<SpanStyle, SpanStyle> {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    return remember(dark) {
-        if (dark) SpanStyle(background = Color(0x664D6A2A)) to SpanStyle(background = Color(0xFF8A6D00), color = Color.White)
-        else SpanStyle(background = Color(0x66FFE082)) to SpanStyle(background = Color(0xFFFFB300), color = Color.Black)
-    }
-}
-
-/** Six colours plus bold and italic, in a light and a dark variant (todo §6.5). */
-@Composable
-private fun rememberStyles(): Array<SpanStyle> {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    return remember(dark) {
-        fun c(light: Long, night: Long) = Color(if (dark) night else light)
-        val keyword = c(0xFF8E24AA, 0xFFC792EA)
-        val type = c(0xFF1565C0, 0xFF82AAFF)
-        Role.entries.map { role ->
-            when (role) {
-                Role.KEYWORD -> SpanStyle(color = keyword)
-                Role.STRING -> SpanStyle(color = c(0xFF2E7D32, 0xFFC3E88D))
-                Role.COMMENT -> SpanStyle(color = c(0xFF757575, 0xFF8A94A6), fontStyle = FontStyle.Italic)
-                Role.NUMBER -> SpanStyle(color = c(0xFFC2410C, 0xFFF78C6C))
-                Role.TYPE -> SpanStyle(color = type)
-                Role.META -> SpanStyle(color = c(0xFF9C6A00, 0xFFFFCB6B))
-                Role.HEADING -> SpanStyle(color = type, fontWeight = FontWeight.Bold)
-                Role.STRONG -> SpanStyle(fontWeight = FontWeight.Bold)
-                Role.EMPHASIS -> SpanStyle(fontStyle = FontStyle.Italic)
-                Role.ERROR -> SpanStyle(color = c(0xFFC62828, 0xFFFF6E6E))
-                Role.WARN -> SpanStyle(color = c(0xFFB26A00, 0xFFFFCB6B))
-                Role.ADDED -> SpanStyle(color = c(0xFF2E7D32, 0xFFA5D6A7))
-            }
-        }.toTypedArray()
     }
 }
 

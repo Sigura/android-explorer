@@ -31,6 +31,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,7 +49,10 @@ import com.mediaviewer.domain.CropMode
 import com.mediaviewer.domain.SortBy
 import com.mediaviewer.ui.AppViewModel
 import com.mediaviewer.ui.Overlay
+import com.mediaviewer.ui.common.CodeFonts
 import com.mediaviewer.ui.editor.EDITOR_TEXT_STEPS
+import com.mediaviewer.ui.editor.EditorThemeDialog
+import com.mediaviewer.ui.editor.editorThemeName
 import java.text.DateFormat
 import java.util.Date
 
@@ -56,6 +62,10 @@ fun SettingsScreen(vm: AppViewModel) {
     val s by vm.settings.collectAsState()
     fun up(t: (AppSettings) -> AppSettings) = vm.settingsStore.update(t)
     val pad = WindowInsets.safeDrawing.asPaddingValues()
+    var themeDialog by remember { mutableStateOf(false) }
+    if (themeDialog) {
+        EditorThemeDialog(s.editorTheme, CodeFonts.family(s.codeFontBundled), onSelect = { id -> up { it.copy(editorTheme = id) } }, onDismiss = { themeDialog = false })
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
@@ -146,6 +156,17 @@ fun SettingsScreen(vm: AppViewModel) {
         item {
             SwitchRow("JetBrains Mono for code", "Code, logs and tables in the editor and on tiles. Off: the system's monospaced font", s.codeFontBundled) { v ->
                 up { it.copy(codeFontBundled = v) }
+            }
+        }
+        item { ActionRow("Colour theme", editorThemeName(s.editorTheme)) { themeDialog = true } }
+        item {
+            SwitchRow("Line numbers", "In a gutter left of the text; also in read-only files", s.editorLineNumbers) { v ->
+                up { it.copy(editorLineNumbers = v) }
+            }
+        }
+        item {
+            SwitchRow("Show tabs and trailing spaces", "Tabs as →, trailing spaces as ·", s.editorWhitespace) { v ->
+                up { it.copy(editorWhitespace = v) }
             }
         }
 

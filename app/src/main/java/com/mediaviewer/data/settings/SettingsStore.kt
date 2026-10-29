@@ -67,6 +67,11 @@ data class AppSettings(
     val editorWrap: Boolean = true,
     /** Code, logs and tables in the bundled JetBrains Mono; false = the system monospace (todo §10.9). */
     val codeFontBundled: Boolean = true,
+    /** Editor colour theme id (`EditorThemes`); "" = *Default*, by the app's day / night (todo §10.8). */
+    val editorTheme: String = "",
+    /** Line numbers in a gutter, and tabs / trailing spaces marked (todo §10.8). */
+    val editorLineNumbers: Boolean = false,
+    val editorWhitespace: Boolean = false,
     /** A tap on a text file opens the editor; otherwise another app (todo §6.2). */
     val textInApp: Boolean = true,
     /** The player is collapsed to its slim bar (todo §4.3). */
@@ -153,6 +158,9 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val editorTextSp = intPreferencesKey("editor_text_sp")
         val editorWrap = booleanPreferencesKey("editor_wrap")
         val codeFontBundled = booleanPreferencesKey("code_font_bundled")
+        val editorTheme = stringPreferencesKey("editor_theme")
+        val editorLineNumbers = booleanPreferencesKey("editor_line_numbers")
+        val editorWhitespace = booleanPreferencesKey("editor_whitespace")
         val textInApp = booleanPreferencesKey("text_open_in_app")
         val playerCompact = booleanPreferencesKey("player_compact")
         val skipBookSec = intPreferencesKey("skip_book_sec")
@@ -267,6 +275,9 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
             editorTextSp = (p[K.editorTextSp] ?: d.editorTextSp).coerceIn(8, 40),
             editorWrap = p[K.editorWrap] ?: d.editorWrap,
             codeFontBundled = p[K.codeFontBundled] ?: d.codeFontBundled,
+            editorTheme = p[K.editorTheme] ?: d.editorTheme,
+            editorLineNumbers = p[K.editorLineNumbers] ?: d.editorLineNumbers,
+            editorWhitespace = p[K.editorWhitespace] ?: d.editorWhitespace,
             textInApp = p[K.textInApp] ?: d.textInApp,
             playerCompact = p[K.playerCompact] ?: d.playerCompact,
             skipBookSec = (p[K.skipBookSec] ?: d.skipBookSec).coerceIn(5, 60),
@@ -304,6 +315,9 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p[K.editorTextSp] = s.editorTextSp
         p[K.editorWrap] = s.editorWrap
         p[K.codeFontBundled] = s.codeFontBundled
+        p[K.editorTheme] = s.editorTheme
+        p[K.editorLineNumbers] = s.editorLineNumbers
+        p[K.editorWhitespace] = s.editorWhitespace
         p[K.textInApp] = s.textInApp
         p[K.playerCompact] = s.playerCompact
         p[K.skipBookSec] = s.skipBookSec
