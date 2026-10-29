@@ -121,6 +121,7 @@ import androidx.compose.ui.unit.dp
 import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.fs.Volumes
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.domain.BookKind
 import com.mediaviewer.domain.SortBy
 import com.mediaviewer.domain.SortSpec
@@ -184,6 +185,8 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
     val status by listing.status.collectAsState()
     val focusTarget by vm.focusTarget.collectAsState()
     val volumes by vm.volumes.collectAsState()
+    val devices by vm.devices.collectAsState()
+    val remote = MtpPaths.isMtp(listing.path)
     val sort by vm.folderSort.collectAsState()
     val nowPlaying by vm.bookPlayer.state.collectAsState()
     val playingPath = nowPlaying?.path?.takeIf { nowPlaying?.folder == listing.path }
@@ -227,7 +230,8 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
     BackHandler(enabled = browser.selectionMode) { browser.clearSelection() }
     browser.pendingTransfer?.let { t ->
         FolderPicker(
-            vm, listing.path, t.move,
+            // From a device (todo §9.5): start in the last local folder.
+            vm, if (remote) vm.settingsStore.recent.value.firstOrNull { !MtpPaths.isMtp(it.path) }?.path ?: volumes.firstOrNull()?.path ?: "/" else listing.path, t.move,
             onPick = { dest ->
                 browser.pendingTransfer = null
                 browser.clearSelection()
@@ -339,7 +343,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                     ev.key == Key.Minus || ev.key == Key.NumPadSubtract -> zoom(-1).let { true }
                     ev.key == Key.Backspace || (ev.isAltPressed && ev.key == Key.DirectionLeft) -> vm.goUp().let { true }
                     ev.key == Key.Comma -> vm.showOverlay(Overlay.SETTINGS).let { true }
-                    ev.key == Key.N && !ev.isCtrlPressed && !browser.selectionMode -> {
+                    ev.key == Key.N && !ev.isCtrlPressed && !browser.selectionMode && !remote -> {
                         newItem = if (ev.isShiftPressed) NewItem.FOLDER else NewItem.FILE
                         true
                     }
@@ -352,7 +356,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                         vm.playFolder(listing.path, entries, bookKind).let { true }
                     ev.key == Key.Escape && browser.selectionMode -> browser.clearSelection().let { true }
                     ev.isCtrlPressed && ev.key == Key.A -> browser.selectAll().let { true }
-                    ev.isCtrlPressed && ev.key == Key.C -> copyFiles(ctx, browser.keyTargets()).let { true }
+                    ev.isCtrlPressed && ev.key == Key.C && !remote -> copyFiles(ctx, browser.keyTargets()).let { true }
                     ev.key == Key.Delete -> browser.delete(browser.keyTargets()).let { true }
                     ev.key == Key.PageDown -> focusBy(1).let { true }
                     ev.key == Key.PageUp -> focusBy(-1).let { true }
@@ -429,11 +433,13 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             if (browser.selectionMode) {
-                SelectionBar(browser)
+                SelectionBar(browser, remote)
             } else {
                 TopBar(
-                    vm, listing.path, Volumes.rootOf(listing.path, volumes),
-                    settings.favourites, tileDp, compact = maxWidth < 600.dp,
+                    vm, listing.path,
+                    if (remote) devices.firstNotNullOfOrNull { d -> d.storages.firstOrNull { it.path == MtpPaths.rootOf(listing.path) } }
+                    else Volumes.rootOf(listing.path, volumes),
+                    settings.favourites, tileDp, compact = maxWidth < 600.dp, remote = remote,
                     play = if (canPlay) ({ vm.playFolder(listing.path, entries, bookKind) }) else null,
                     playLabel = if (bookKind != null) "Listen" else "Slideshow",
                     onNew = { newItem = it },
@@ -538,6 +544,8 @@ private fun TopBar(
     favourites: Set<String>,
     tileDp: Int,
     compact: Boolean,
+    /** A folder on an MTP device (todo §9): no new files, no favourite. */
+    remote: Boolean,
     /** Folder Play button (todo §3.7); null hides it. */
     play: (() -> Unit)?,
     playLabel: String,
@@ -634,15 +642,17 @@ private fun TopBar(
                     TipIconButton("More", onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         Item("Sort…", Icons.AutoMirrored.Rounded.Sort) { sort.onOpen(true) }
-                        Item("New text file", Icons.AutoMirrored.Rounded.NoteAdd) { onNew(NewItem.FILE) }
-                        Item("New folder", Icons.Rounded.CreateNewFolder) { onNew(NewItem.FOLDER) }
-                        Item(favLabel, favIcon) { vm.toggleFavourite(path) }
+                        if (!remote) {
+                            Item("New text file", Icons.AutoMirrored.Rounded.NoteAdd) { onNew(NewItem.FILE) }
+                            Item("New folder", Icons.Rounded.CreateNewFolder) { onNew(NewItem.FOLDER) }
+                            Item(favLabel, favIcon) { vm.toggleFavourite(path) }
+                        }
                         Item("Settings", Icons.Rounded.Settings) { vm.showOverlay(Overlay.SETTINGS) }
                     }
                     // Opened from the menu item or `S`, in the menu's place.
                     SortMenu(sort)
                 }
-            } else {
+            } else if (!remote) {
                 Box {
                     TipIconButton("New (N)", onClick = { menu = true }) { Icon(Icons.Rounded.Add, contentDescription = "New") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -651,6 +661,8 @@ private fun TopBar(
                     }
                 }
                 TipIconButton(favLabel, onClick = { vm.toggleFavourite(path) }) { Icon(favIcon, contentDescription = favLabel) }
+                TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
+            } else {
                 TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             }
         }
@@ -711,7 +723,7 @@ private fun TileSizeSlider(tileDp: Int, width: Dp = 112.dp, onChange: (Int) -> U
 
 /** Contextual bar of selection mode (README §4.6). */
 @Composable
-private fun SelectionBar(browser: BrowserState) {
+private fun SelectionBar(browser: BrowserState, remote: Boolean) {
     val statusTop = topInset()
     Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -722,6 +734,13 @@ private fun SelectionBar(browser: BrowserState) {
             Text("${browser.selection.size} selected", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             TipIconButton("Select all (Ctrl+A)", onClick = browser::selectAll) { Icon(Icons.AutoMirrored.Rounded.PlaylistAddCheck, contentDescription = "Select all") }
             TipIconButton("Invert selection", onClick = browser::invert) { Icon(Icons.Rounded.SwapHoriz, contentDescription = "Invert selection") }
+            if (remote) {
+                // Device folders (todo §9.5): copying to this phone is the only action.
+                TipIconButton("Copy to…", onClick = { browser.transfer(browser.selectedEntries(), false) }) {
+                    Icon(Icons.AutoMirrored.Rounded.DriveFileMove, contentDescription = "Copy to…")
+                }
+                return@Row
+            }
             TipIconButton("Share", onClick = { browser.share(browser.selectedEntries()) }) {
                 Icon(Icons.Rounded.Share, contentDescription = "Share")
             }

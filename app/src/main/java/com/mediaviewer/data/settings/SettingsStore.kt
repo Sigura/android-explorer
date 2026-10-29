@@ -67,6 +67,8 @@ data class AppSettings(
     val editorWrap: Boolean = true,
     /** A tap on a text file opens the editor; otherwise another app (todo §6.2). */
     val textInApp: Boolean = true,
+    /** The player is collapsed to its slim bar (todo §4.3). */
+    val playerCompact: Boolean = false,
 )
 
 /** README §7.2. The anchor is the key of the first visible item plus its pixel offset. */
@@ -142,6 +144,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val editorTextSp = intPreferencesKey("editor_text_sp")
         val editorWrap = booleanPreferencesKey("editor_wrap")
         val textInApp = booleanPreferencesKey("text_open_in_app")
+        val playerCompact = booleanPreferencesKey("player_compact")
         val recent = stringPreferencesKey("recent")
         val session = stringPreferencesKey("session")
         val folderSorts = stringPreferencesKey("folder_sorts")
@@ -250,6 +253,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
             editorTextSp = (p[K.editorTextSp] ?: d.editorTextSp).coerceIn(8, 40),
             editorWrap = p[K.editorWrap] ?: d.editorWrap,
             textInApp = p[K.textInApp] ?: d.textInApp,
+            playerCompact = p[K.playerCompact] ?: d.playerCompact,
         )
     }
 
@@ -281,6 +285,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p[K.editorTextSp] = s.editorTextSp
         p[K.editorWrap] = s.editorWrap
         p[K.textInApp] = s.textInApp
+        p[K.playerCompact] = s.playerCompact
     }
 
     private inline fun <reified E : Enum<E>> enumOr(name: String?, default: E): E =

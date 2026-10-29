@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.viewModelScope
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import com.mediaviewer.domain.model.OtherKind
@@ -44,6 +45,12 @@ class BrowserState(
 
     var pendingTransfer by mutableStateOf<Transfer?>(null)
 
+    /**
+     * The folder is on an MTP device (todo §9): read-only for now, so share, move, delete and
+     * editing are left out, and files are fetched before they open.
+     */
+    val remote: Boolean get() = MtpPaths.isMtp(vm.listing.value?.path)
+
     private var dragAnchor = -1
     private var clickAnchor = -1
     private var dragSelecting = true
@@ -52,6 +59,7 @@ class BrowserState(
     fun goUp() = vm.goUp()
 
     fun open(e: FileEntry) {
+        if (MtpPaths.isMtp(e.path)) return openRemote(e)
         when {
             e.isFolder -> vm.openFolder(e.path)
             // Other apps open only from the plain folder view, never in selection mode.
@@ -63,12 +71,21 @@ class BrowserState(
         }
     }
 
+    private fun openRemote(e: FileEntry) {
+        when {
+            e.isFolder -> vm.openFolder(e.path)
+            e.isMedia -> vm.openSlideshow(e)
+            e.type == MediaType.PARTIAL || selectionMode -> Unit
+            else -> vm.openDeviceFileWith(e) { local -> ExternalApps.open(context, local, chooser = false) }
+        }
+    }
+
     /**
      * Text, code, and files of unknown type, which may turn out to be text (todo §6.2). The editor
      * checks the content: binary or very large files still open with another app.
      */
     fun canEdit(e: FileEntry): Boolean =
-        e.type == MediaType.OTHER && (e.other.hasTextPreview || e.other == OtherKind.UNKNOWN)
+        !MtpPaths.isMtp(e.path) && e.type == MediaType.OTHER && (e.other.hasTextPreview || e.other == OtherKind.UNKNOWN)
 
     /** The context menu offers Edit when a tap opens text files with other apps. */
     fun offersEdit(e: FileEntry): Boolean = canEdit(e) && !vm.settings.value.textInApp
@@ -86,6 +103,7 @@ class BrowserState(
     /** Context menu "Open with…": always the system chooser. */
     fun openWith(e: FileEntry, chooser: Boolean = true) {
         if (selectionMode) return
+        if (MtpPaths.isMtp(e.path)) return vm.openDeviceFileWith(e) { local -> ExternalApps.open(context, local, chooser) }
         vm.viewModelScope.launch {
             if (!ExternalApps.open(context, e, chooser)) vm.errors.notify("No app can open ${e.name}", e.path, log = false)
         }
@@ -142,14 +160,17 @@ class BrowserState(
     fun keyTargets(): List<FileEntry> = if (selectionMode) selectedEntries() else listOfNotNull(focused)
 
     fun delete(list: List<FileEntry>) {
-        if (list.isEmpty()) return
+        if (list.isEmpty() || remote) return
         clearSelection()
         vm.delete(list)
     }
 
-    fun share(list: List<FileEntry>) = shareFiles(context, list.filter { !it.isFolder })
+    fun share(list: List<FileEntry>) {
+        if (!remote) shareFiles(context, list.filter { !it.isFolder })
+    }
 
     fun transfer(list: List<FileEntry>, move: Boolean) {
+        if (move && remote) return
         if (list.isNotEmpty()) pendingTransfer = Transfer(move, list)
     }
 

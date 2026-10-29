@@ -1,6 +1,10 @@
 package com.mediaviewer.ui
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
@@ -18,6 +22,8 @@ import com.mediaviewer.data.fs.TextFile
 import com.mediaviewer.data.fs.Trash
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.fs.Volumes
+import com.mediaviewer.data.mtp.MtpDevices
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.settings.RecentFolder
 import com.mediaviewer.data.settings.RestoreMode
 import com.mediaviewer.data.settings.SlideshowSession
@@ -83,6 +89,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val bookPlayer = mv.bookPlayer
     val drafts = Drafts(File(app.filesDir, "drafts"))
 
+    /** Cameras and phones over USB (todo §9), shown on the home screen. */
+    val mtp = mv.mtp
+    val devices: StateFlow<List<MtpDevices.Device>> = mtp.devices
+
     /** The open editor's state (todo §6), kept here so it survives the activity being recreated. */
     var editorState: EditorState? = null
 
@@ -119,6 +129,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var started = false
     private var busyJob: Job? = null
 
+    /** The device folder a slideshow over its local mirror was started from (todo §9.6). */
+    private var parked: FolderListing? = null
+    private var prefetchJob: Job? = null
+
+    /** Mounting and removal of USB drives and SD cards refresh [volumes]. */
+    private val mountReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = refreshVolumes()
+    }
+
     init {
         viewModelScope.launch {
             settingsStore.load()
@@ -126,6 +145,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             launch(Dispatchers.IO) { mv.trash } // purge leftovers off the main thread
             if (hasStoragePermission()) start() else _screen.value = Screen.Permission
             _ready.value = true
+        }
+        mtp.start()
+        // USB drives and SD cards: the home screen's Storage list follows mounting and removal.
+        ContextCompat.registerReceiver(
+            app, mountReceiver,
+            IntentFilter().apply {
+                listOf(Intent.ACTION_MEDIA_MOUNTED, Intent.ACTION_MEDIA_UNMOUNTED, Intent.ACTION_MEDIA_REMOVED, Intent.ACTION_MEDIA_BAD_REMOVAL, Intent.ACTION_MEDIA_EJECT)
+                    .forEach(::addAction)
+                addDataScheme("file")
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        viewModelScope.launch {
+            // An unplugged device (todo §9.7): leave its folders, like a removed SD card.
+            devices.collect { list ->
+                val ids = list.filter { it.state == MtpDevices.State.READY }.mapTo(HashSet()) { it.id }
+                fun gone(path: String?) = path != null && MtpPaths.parse(path)?.deviceId?.let { it !in ids } == true
+                val parkedGone = gone(parked?.path)
+                if (parkedGone) {
+                    prefetchJob?.cancel()
+                    parked?.close()
+                    parked = null
+                }
+                val l = _listing.value
+                if (l != null && gone(l.path)) {
+                    errors.notify("Device disconnected", l.path, log = false)
+                    goRoot()
+                } else if (parkedGone && _screen.value is Screen.Slideshow) {
+                    errors.notify("Device disconnected", log = false)
+                    _listing.value?.close()
+                    goRoot()
+                }
+            }
         }
         viewModelScope.launch {
             // The open folder's order: settings, its own choice, and whether images turned up.
@@ -187,6 +239,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * watchdog on IO. Never on the main thread.
      */
     suspend fun bookKind(entries: List<FileEntry>): BookKind? = withContext(Dispatchers.IO) {
+        // Device folders (todo §9): no book playback yet, Play starts the slideshow.
+        if (entries.any { MtpPaths.isMtp(it.path) }) return@withContext null
         val longMs = settings.value.longVideoMin * 60_000L
         val videos = entries.filter { it.type == MediaType.VIDEO }
         val durations = HashMap<String, Long>()
@@ -240,7 +294,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val s = settings.value
         val session = settingsStore.session
         // README §7.3: straight back into the slideshow if that is where the app stopped.
-        if (s.restore == RestoreMode.FOLDER_AND_SLIDESHOW && session != null && session.active && isAvailable(session.folder)) {
+        if (s.restore == RestoreMode.FOLDER_AND_SLIDESHOW && session != null && session.active && !mtp.isMirror(session.folder) && isAvailable(session.folder)) {
             openFolder(session.folder, focus = session.current, showBusy = false)
             _screen.value = Screen.Slideshow(session.folder, session.current, session)
             errors.message(
@@ -256,7 +310,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // README §7.2: the first recent folder that is still available.
         if (s.restore != RestoreMode.OFF) {
             for (r in settingsStore.recent.value) {
-                if (isAvailable(r.path)) {
+                if (!MtpPaths.isMtp(r.path) && isAvailable(r.path)) {
                     openFolder(r.path, focus = r.lastViewed, showBusy = false)
                     return
                 }
@@ -285,7 +339,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             // Until an image is listed, the folder is ordered as one without images.
             val spec = Sorting.effective(settings.value.sort, settingsStore.folderSorts.value[path], hasImages = false)
-            FolderListing(path, viewModelScope, Sorting.comparator(spec), settings.value.showHidden, ::onListingFailed)
+            val remote = MtpPaths.isMtp(path)
+            FolderListing(
+                path, viewModelScope, Sorting.comparator(spec), settings.value.showHidden,
+                scanner = if (remote) mtp::scan else com.mediaviewer.data.fs.FolderScanner::scan,
+                watch = !remote,
+                onFailed = ::onListingFailed,
+            )
                 .also {
                     applied = it to spec
                     _folderSort.value = spec
@@ -295,7 +355,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _listing.value = listing
         _focusTarget.value = focus
         _screen.value = Screen.Folder(path)
-        touchRecent(path)
+        // Device paths last only until it is unplugged: never recent.
+        if (!MtpPaths.isMtp(path)) touchRecent(path)
         if (showBusy) {
             setBusy("Reading folder…", onStop = { listing.stop() }) { listing.started.first { it } }
         }
@@ -318,6 +379,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val path = l.path
+        if (MtpPaths.isMtp(path)) {
+            MtpPaths.parent(path)?.let { openFolder(it, focus = path) } ?: goRoot()
+            return
+        }
         val vols = _volumes.value
         val isVolumeRoot = vols.any { it.path == path }
         val parent = File(path).parentFile
@@ -331,12 +396,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun goRoot() {
         _listing.value?.close()
         _listing.value = null
+        prefetchJob?.cancel()
+        parked?.close()
+        parked = null
         _screen.value = Screen.Root
         refreshVolumes()
     }
 
     fun openSlideshow(entry: FileEntry) {
         val l = _listing.value ?: return
+        if (MtpPaths.isMtp(entry.path)) return openDeviceSlideshow(l, entry)
         thumbnails.clearFailure(entry.path)
         _screen.value = Screen.Slideshow(l.path, entry.path)
     }
@@ -346,6 +415,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val s = _screen.value as? Screen.Slideshow ?: return
         val session = settingsStore.session
         session?.let { settingsStore.saveSession(it.copy(active = false)) }
+        if (mtp.isMirror(s.folder)) return closeDeviceSlideshow(lastViewed ?: session?.current?.takeIf { session.folder == s.folder })
         // System Back doesn't know the item: the session always holds the last one shown.
         val lastViewed = lastViewed ?: session?.current?.takeIf { session.folder == s.folder }
         if (lastViewed != null) {
@@ -586,6 +656,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun transfer(entries: List<FileEntry>, destDir: String, move: Boolean) {
         if (entries.isEmpty()) return
+        if (entries.any { MtpPaths.isMtp(it.path) }) return importFromDevice(entries, destDir)
         val verb = if (move) "Moving" else "Copying"
         val listing = _listing.value
         var job: Job? = null
@@ -614,6 +685,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Folder unreadable or removed (README §2.1, "Removed volume"). */
     private fun onListingFailed(path: String, reason: String) {
+        if (MtpPaths.isMtp(path)) {
+            if (mtp.isConnected(path)) errors.readError(path, "Can't read folder: $reason") else errors.notify("Device not responding — unplug it and plug it in again", path)
+            return
+        }
         viewModelScope.launch {
             val gone = withContext(Dispatchers.IO) { abandonable(1000) { !File(path).isDirectory } ?: true }
             if (!gone) {
@@ -629,8 +704,142 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    override fun onCleared() {
+    // ------------------------------------------------------------------ MTP devices (todo §9)
+
+    /**
+     * Media on a device are shown from a local mirror (todo §9.6): the tapped file is downloaded
+     * with the wait indicator, then the slideshow runs over the mirror folder while the folder's
+     * other media follow in its order. The mirror listing watches its folder, so each file joins
+     * the slideshow as soon as it is complete. The device folder stays open behind it.
+     */
+    private fun openDeviceSlideshow(l: FolderListing, entry: FileEntry) {
+        var job: Job? = null
+        setBusy("Loading ${entry.name}…", onStop = { job?.cancel() }) {
+            val id = _busy.value?.id ?: 0L
+            job = viewModelScope.launch {
+                val local = try {
+                    withContext(Dispatchers.IO) {
+                        val dir = mtp.mirrorOf(l.path) ?: return@withContext null
+                        if (mtp.mirrorBytes() > MtpDevices.MIRROR_BUDGET) mtp.trimMirror(dir)
+                        mtp.fetch(entry) { done, total ->
+                            if (total > 0) viewModelScope.launch { updateBusy(id, "Loading ${entry.name}…", done.toFloat() / total) }
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    errors.readError(entry.path, e.message ?: "read error", e)
+                    errors.notify("Can't load ${entry.name}: ${e.message}", entry.path, log = false)
+                    return@launch
+                }
+                if (local == null) {
+                    errors.notify("Device disconnected", entry.path, log = false)
+                    return@launch
+                }
+                val mirror = local.parentFile?.path ?: return@launch
+                val spec = _folderSort.value
+                val ml = FolderListing(mirror, viewModelScope, Sorting.comparator(spec), showHidden = true) { _, _ -> }
+                ml.start()
+                parked = l
+                applied = ml to spec
+                _listing.value = ml
+                _screen.value = Screen.Slideshow(mirror, local.path)
+                prefetch(l, entry)
+            }
+            job?.join()
+        }
+    }
+
+    /** The folder's other media, from the one after [start] round to the one before it, within the mirror budget. */
+    private fun prefetch(l: FolderListing, start: FileEntry) {
+        prefetchJob?.cancel()
+        prefetchJob = viewModelScope.launch(Dispatchers.IO) {
+            l.status.first { it != FolderListing.Status.LOADING }
+            val media = l.snapshot().filter { it.isMedia }
+            val i = media.indexOfFirst { it.path == start.path }
+            val queue = if (i < 0) media else media.drop(i + 1) + media.take(i)
+            var bytes = mtp.mirrorBytes()
+            for (e in queue) {
+                if (bytes + e.size > MtpDevices.MIRROR_BUDGET) break
+                try {
+                    mtp.fetch(e) ?: break
+                    bytes += e.size
+                } catch (ex: kotlinx.coroutines.CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    errors.readError(e.path, ex.message ?: "read error", ex)
+                    if (!mtp.isConnected(e.path)) break
+                }
+            }
+        }
+    }
+
+    private fun closeDeviceSlideshow(lastViewed: String?) {
+        prefetchJob?.cancel()
+        val back = parked
+        parked = null
         _listing.value?.close()
+        if (back == null) {
+            goRoot()
+            return
+        }
+        _listing.value = back
+        _focusTarget.value = lastViewed?.let(mtp::remoteOf)
+        _screen.value = Screen.Folder(back.path)
+    }
+
+    /** "Copy to…" from a device (todo §9.5): files and folders, with progress and Stop. */
+    private fun importFromDevice(entries: List<FileEntry>, destDir: String) {
+        var job: Job? = null
+        setBusy("Copying…", onStop = { job?.cancel() }) {
+            val id = _busy.value?.id ?: 0L
+            var n = 0
+            job = viewModelScope.launch(Dispatchers.IO) {
+                val r = mtp.importTo(entries, File(destDir)) { name ->
+                    n++
+                    viewModelScope.launch { updateBusy(id, "Copying $n: $name", null) }
+                }
+                withContext(Dispatchers.Main) {
+                    val name = destDir.substringAfterLast('/')
+                    if (r.failed.isEmpty()) {
+                        errors.notify("Copied ${r.done} to $name", log = false)
+                    } else {
+                        r.failed.forEach { (p, why) -> errors.readError(p, why) }
+                        errors.notify("${r.failed.size} of ${entries.size} couldn't be copied: ${r.failed[0].second}", r.failed[0].first)
+                    }
+                }
+            }
+            job?.join()
+        }
+    }
+
+    /**
+     * Files other than media on a device open with other apps (README §3.11) from a local copy.
+     */
+    fun openDeviceFileWith(entry: FileEntry, open: suspend (FileEntry) -> Boolean) {
+        var job: Job? = null
+        setBusy("Loading ${entry.name}…", onStop = { job?.cancel() }) {
+            job = viewModelScope.launch {
+                val local = try {
+                    withContext(Dispatchers.IO) { mtp.fetch(entry) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    errors.notify("Can't load ${entry.name}: ${e.message}", entry.path)
+                    return@launch
+                }
+                if (local == null) return@launch errors.notify("Device disconnected", entry.path, log = false)
+                if (!open(entry.copy(path = local.path))) errors.notify("No app can open ${entry.name}", entry.path, log = false)
+            }
+            job?.join()
+        }
+    }
+
+    override fun onCleared() {
+        getApplication<Application>().unregisterReceiver(mountReceiver)
+        _listing.value?.close()
+        parked?.close()
+        prefetchJob?.cancel()
     }
 
     companion object {

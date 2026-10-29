@@ -80,6 +80,23 @@ class SortingTest {
         ).sortedWith(Sorting.comparator(SortSpec(SortBy.NAME, descending = false)))
         assertEquals(listOf("dir", "b2.gif", "b10.jpg", "z.txt"), list.map { it.name })
     }
+
+    @Test fun folderWithoutImagesSortsByName() {
+        val global = SortSpec(SortBy.DATE, descending = true)
+        val spec = Sorting.effective(global, own = null, hasImages = false)
+        assertEquals(SortSpec(SortBy.NAME, descending = false), spec)
+        val list = listOf("a10.mp3", "a2.mp3", "a1.mp3").mapIndexed { i, n -> FileEntry("/d/$n", n, MediaType.OTHER, 0, i.toLong()) }
+            .sortedWith(Sorting.comparator(spec))
+        assertEquals(listOf("a1.mp3", "a2.mp3", "a10.mp3"), list.map { it.name })
+        assertEquals(global, Sorting.effective(global, own = null, hasImages = true))
+    }
+
+    @Test fun folderOwnSortWins() {
+        val global = SortSpec(SortBy.SIZE, descending = false, foldersFirst = false)
+        val own = FolderSort(SortBy.DATE, descending = false)
+        assertEquals(SortSpec(SortBy.DATE, false, foldersFirst = false), Sorting.effective(global, own, hasImages = false))
+        assertEquals(SortSpec(SortBy.DATE, false, foldersFirst = false), Sorting.effective(global, own, hasImages = true))
+    }
 }
 
 class SlideOrderTest {
@@ -163,5 +180,33 @@ class SlideOrderTest {
         val c = o.current!!
         o.setRandom(false)
         assertEquals(c, o.current)
+    }
+}
+
+class BookTimesTest {
+    private val paths = listOf("/b/1.mp3", "/b/2.mp3", "/b/3.mp3")
+
+    @Test fun progressWhenAllKnown() {
+        val t = BookTimes(paths, listOf(60_000L, 120_000L, 180_000L))
+        val p = t.progress(current = 1, positionMs = 30_000, currentMs = 120_000)
+        assertEquals(90_000L, p.elapsedMs)
+        assertEquals(360_000L, p.totalMs)
+        assertTrue(p.exact)
+        assertEquals(270_000L, p.leftMs(1f))
+        assertEquals(180_000L, p.leftMs(1.5f))
+    }
+
+    @Test fun playerDurationFillsTheGap() {
+        val t = BookTimes(paths, listOf(60_000L, null, 180_000L))
+        assertTrue(t.progress(1, 0, 120_000).exact)
+        val p = t.progress(1, 0, 0)
+        assertFalse(p.exact)
+        assertEquals(240_000L, p.totalMs)
+    }
+
+    @Test fun unknownSegmentsAreAverage() {
+        val w = BookTimes(paths, listOf(100L, null, 300L)).weights(0, 0)
+        assertEquals(listOf(100f, 200f, 300f), w)
+        assertEquals(listOf(1f, 1f, 1f), BookTimes(paths, listOf(null, null, null)).weights(0, 0))
     }
 }

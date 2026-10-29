@@ -14,6 +14,7 @@ import com.mediaviewer.data.ErrorReporter
 import com.mediaviewer.data.fs.Trash
 import com.mediaviewer.data.history.HistoryStore
 import com.mediaviewer.data.meta.MetaStore
+import com.mediaviewer.data.mtp.MtpDevices
 import com.mediaviewer.data.settings.SettingsStore
 import com.mediaviewer.data.thumbs.TextDecode
 import com.mediaviewer.data.thumbs.Thumbnails
@@ -29,7 +30,10 @@ class MediaViewerApp : Application(), SingletonImageLoader.Factory {
     val errors by lazy { ErrorReporter(this, appScope) }
     val settings by lazy { SettingsStore(this, appScope) }
     val meta by lazy { MetaStore(this) }
-    val thumbnails by lazy { Thumbnails(meta, errors) }
+    val thumbnails by lazy { Thumbnails(meta, errors).also { it.remote = { path -> mtp.thumbnail(path) } } }
+
+    /** Cameras and phones over USB (todo §9). */
+    val mtp by lazy { MtpDevices(this, appScope) }
 
     /** Listening history (todo §3.4): user data, unlike [meta]. */
     val history by lazy { HistoryStore(this) }

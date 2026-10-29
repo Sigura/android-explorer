@@ -61,9 +61,11 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -82,6 +84,7 @@ import androidx.media3.ui.PlayerView
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.size.Scale
 import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.settings.SlideshowSession
 import com.mediaviewer.data.settings.Transition
@@ -102,6 +105,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     val view = LocalView.current
     val zoom = remember { ZoomState() }
     val focus = remember { FocusRequester() }
+    var slideSize by remember { mutableStateOf(IntSize.Zero) }
     /** GIFs on screen (two during a transition), so the one being left can say where it was. */
     val gifs = remember { HashMap<String, SlideGif>() }
     val player = remember {
@@ -131,6 +135,10 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
                 else -> 0L
             }
         }
+        c.preloadImage = { e ->
+            val size = slideSize
+            if (size == IntSize.Zero) null else SingletonImageLoader.get(ctx).execute(slideRequest(ctx, e, size))
+        }
         onDispose {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             ctl.show(WindowInsetsCompat.Type.systemBars())
@@ -148,8 +156,14 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
                 }
                 // Stop, not pause: in DeX and split screen (Android 9) a visible window is paused
                 // as soon as another window gets focus, and the video should keep playing (README §3.9).
-                Lifecycle.Event.ON_STOP -> player.pause()
-                Lifecycle.Event.ON_START -> if (!c.paused && !c.menuOpen) player.play()
+                Lifecycle.Event.ON_STOP -> {
+                    player.pause()
+                    c.onVisible(false)
+                }
+                Lifecycle.Event.ON_START -> {
+                    c.onVisible(true)
+                    if (!c.paused) player.play()
+                }
                 else -> Unit
             }
         }
@@ -165,7 +179,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     LaunchedEffect(c.menuOpen) { if (!c.menuOpen) focus.requestFocus() }
 
     // The item timer (README §5.1).
-    LaunchedEffect(c.generation, c.timing, c.paused, c.menuOpen, c.single) { c.tick() }
+    LaunchedEffect(c.generation, c.timing, c.paused, c.menuOpen, c.starts, c.single) { c.tick() }
 
     // Video playback with one player instance.
     LaunchedEffect(c.generation) {
@@ -179,7 +193,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.prepare()
         if (c.resumePositionMs > 0) player.seekTo(c.resumePositionMs)
-        player.playWhenReady = !c.paused && !c.menuOpen
+        player.playWhenReady = !c.paused
         while (true) {
             delay(1000)
             c.videoPositionMs = player.currentPosition
@@ -196,8 +210,8 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             !settings.muted,
         )
     }
-    // The open menu pauses the slideshow, the video included (README §6).
-    LaunchedEffect(c.paused, c.menuOpen) { if (c.current?.type == MediaType.VIDEO) player.playWhenReady = !c.paused && !c.menuOpen }
+    // The open menu only stops the timer; the video keeps playing.
+    LaunchedEffect(c.paused) { if (c.current?.type == MediaType.VIDEO) player.playWhenReady = !c.paused }
     LaunchedEffect(c.timing, c.single) {
         if (c.current?.type == MediaType.VIDEO) {
             player.repeatMode = if (c.timing?.loop == true || c.single) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
@@ -226,20 +240,11 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
         onDispose { player.removeListener(l) }
     }
 
-    // Preload the next image so the switch is instant (README §5.3).
-    LaunchedEffect(c.generation) {
-        delay(500)
-        val n = c.peekNext() ?: return@LaunchedEffect
-        // Coil memory-caches bitmaps only; preloading an animation would just be decoded twice.
-        if (n.type == MediaType.IMAGE) {
-            SingletonImageLoader.get(ctx).enqueue(ImageRequest.Builder(ctx).data(File(n.path)).build())
-        }
-    }
-
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .onSizeChanged { slideSize = it }
             .onKeyEvent { ev -> handleKey(c, ev.key, ev.type, settings.invertSwipe) }
             .focusRequester(focus)
             .focusable()
@@ -269,7 +274,8 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             transitionSpec = { transitionFor(settings.transition, c.direction) },
             label = "slide",
         ) { e ->
-            if (e != null) Slide(e, c, player, zoom, gifs, vm.thumbnails.largeGifBytes)
+            // The image is decoded for the slide's size, so it waits for the first layout.
+            if (e != null && slideSize != IntSize.Zero) Slide(e, c, player, zoom, gifs, vm.thumbnails.largeGifBytes, slideSize)
         }
         val t = c.timing
         if (t != null && !c.single && current != null) {
@@ -442,6 +448,7 @@ private fun Slide(
     zoom: ZoomState,
     gifs: MutableMap<String, SlideGif>,
     largeGifBytes: Long,
+    size: IntSize,
 ) {
     val ctx = LocalContext.current
     val zoomMod = Modifier
@@ -474,7 +481,7 @@ private fun Slide(
             if (gif != null && gif.state != SlideGif.State.UNSUPPORTED) {
                 PlayedGif(e, gif, c, gifs, zoomMod)
             } else {
-                val request = remember(e.path) { ImageRequest.Builder(ctx).data(File(e.path)).build() }
+                val request = remember(e.path) { slideRequest(ctx, e, size) }
                 AsyncImage(
                     model = request,
                     contentDescription = e.name,
@@ -489,6 +496,13 @@ private fun Slide(
     }
 }
 
+/**
+ * The slide's image request. The preload (README §5.3) builds the same one, so the slide finds the
+ * decoded bitmap in Coil's memory cache; an animation isn't preloaded, it would be decoded twice.
+ */
+private fun slideRequest(ctx: android.content.Context, e: FileEntry, size: IntSize): ImageRequest =
+    ImageRequest.Builder(ctx).data(File(e.path)).size(size.width, size.height).scale(Scale.FIT).build()
+
 @Composable
 private fun PlayedGif(e: FileEntry, gif: SlideGif, c: SlideshowController, gifs: MutableMap<String, SlideGif>, modifier: Modifier) {
     DisposableEffect(gif) {
@@ -496,9 +510,8 @@ private fun PlayedGif(e: FileEntry, gif: SlideGif, c: SlideshowController, gifs:
         onDispose { if (gifs[e.path] === gif) gifs.remove(e.path) }
     }
     LaunchedEffect(gif) { gif.play() }
-    // Paused or with the menu open, the GIF stays on its frame and goes on from there.
-    val still = c.paused || c.menuOpen
-    LaunchedEffect(gif, still) { gif.running.value = !still }
+    // Paused, the GIF stays on its frame and goes on from there.
+    LaunchedEffect(gif, c.paused) { gif.running.value = !c.paused }
     LaunchedEffect(gif.state) {
         when (gif.state) {
             SlideGif.State.PLAYING -> gif.frame?.let { c.onReady(e, null, it.width, it.height) }

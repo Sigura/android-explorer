@@ -19,6 +19,8 @@ Contents
 5. [Things easy to forget](#5-things-easy-to-forget)
 6. ~~Text files: create and edit~~ — done, README §3.13
 7. [Linux desktop version](#7-linux-desktop-version) — separate app, spec in docs/LINUX_DESKTOP_SPEC.md
+8. [Sorting, mini player and long names](#8-sorting-mini-player-and-long-names)
+9. [MTP devices: cameras and phones over USB](#9-mtp-devices-cameras-and-phones-over-usb) — first step done, README §3.14
 
 ---
 
@@ -209,13 +211,13 @@ Opened from the mini player, from the folder ▶ button (long press), or by tapp
 | Seek | Drag the seek bar; a precise-seek bubble shows the target time | `Home` / `End` | — |
 | Speed | 1.0× button → sheet with presets 0.75–3.0× and a ±0.05 stepper | `[` / `]` | — |
 
-- **⏮ behaviour:** within the first 3 s it goes to the previous file; later it goes to the start of the current file (standard behaviour).
+- **⏮ behaviour:** within the first 3 s it goes to the previous file; later it goes to the start of the current file (standard behaviour). Done in the mini player (README §2, Listening), with ⏭; the folder view marks and focuses the playing file.
 - **Shuffle** (🔀, switches the folder to music mode): a stable shuffle without repeats, reusing `SlideOrder` (same rules as the slideshow random order). `SlideOrder` always wraps into a new cycle; with repeat off the queue must stop at the end instead (a flag). Its on/off state, seed and cycle progress are saved per folder.
 - **Speed** is saved per book. **Skip silence** is a toggle in the speed sheet (`ExoPlayer.setSkipSilenceEnabled`).
 - **Sleep timer:** 5 / 15 / 30 / 45 / 60 min, or end of the current file. The last 10 s fade out. Shaking the phone or tapping the notification while it fades adds 5 more min. 🌙 shows the remaining time.
 - **Overflow menu (⋮):** no *Open with…*: other apps open only from the folder view (README §3.11). Open folder, file info (tags, bitrate, codec), share, mark book as unfinished / finished, reset history.
 
-### 4.3 Mini player — done (README §2, Listening); open: tap opens the player screen, swipe down to stop
+### 4.3 Mini player — done (README §2, Listening): full and collapsed, seek bar, book progress and bar, speed, sleep timer; open: player screen, cover
 
 A 56 dp bar at the bottom of the folder and root screens while something plays or is paused. It shows the cover, file name, a thin progress line and ▶/⏸. Tapping it opens the player screen; swiping it down while paused stops playback. The grid gets bottom padding, so the last row isn't hidden.
 
@@ -283,3 +285,86 @@ Still open:
 ## 7. Linux desktop version
 
 A separate native desktop app (Rust + GTK 4 + libadwaita + GStreamer) with the same features and a real desktop UI. The full task, stack choice, UI spec and investigation findings are in [docs/LINUX_DESKTOP_SPEC.md](docs/LINUX_DESKTOP_SPEC.md). The earlier idea of sharing the Kotlin / Compose code with a desktop build was dropped (spec §13.3).
+
+---
+
+## 8. Sorting, mini player and long names
+
+Requested 2026-10-25. The Linux app gets the same features (spec §4.3, §4.8).
+
+- **Name order for folders without images.** A new default sort, *Automatic*: folders with images or GIFs sort by date, newest first (as now); every other folder (documents, audio, books, lectures, folders of folders) sorts by name in natural order (`a1`, `a2`, `a10`, using `NaturalOrder`). The first listing batch decides; the result is remembered with the folder, so the next visit starts in the right order.
+- **Sort remembered per folder.** The sort menu (name, date modified, size, type; ascending / descending; folders first) applies to the open folder and is saved for it between runs (DataStore, keyed by path, ≤ 5,000 folders, least recently opened dropped first). *Automatic* removes the folder's own choice; *Use for all folders* sets the default. The slideshow follows the folder's sort.
+- **⏮ / ⏭ in the mini player** (§4.3): icon buttons for the previous and next file around ▶/⏸, with the §4.2 rule (⏮ within the first 3 s → previous file, later → start of the file); disabled at the ends of the queue; also from the media session (lock screen, headset). The bar may need more room at 360 dp **verify**.
+- **The playing file is selected:** with the book's folder open, the playing file's tile gets a *now playing* badge and is scrolled into view on every file change; it is selected only when no other selection is being made (selection mode off, or only the previously playing file selected).
+- **Scrolling long names** (marquee): every file and folder name that doesn't fit its tile scrolls sideways in a continuous loop (the name, a gap, the name again, without stopping), so the whole name can be read; names that fit don't move (`Modifier.basicMarquee(iterations = Int.MAX_VALUE)`, Compose 1.8). Off when *Remove animations* is on; names are then shortened as now. **verify** scrolling smoothness with a full screen of long hash names.
+
+---
+
+## 9. MTP devices: cameras and phones over USB
+
+Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):** the home screen *Devices* section, browsing, device thumbnails, the slideshow from a local mirror, *Copy to…* and *Open with* (README §3.14). The rest of this section is open.
+
+**Goal.** A camera, another phone, an action cam or a media player plugged into the phone or tablet (USB OTG, USB-C) shows up on the home screen. Its photos and videos can be browsed with thumbnails, watched in the slideshow and copied to this device, as easily as an SD card.
+
+### 9.1 Findings
+
+- Such devices don't mount as a folder: they speak **MTP** (phones, players) or **PTP** (cameras; MTP is an extension of it). Android has no path for them; apps see them only through **`android.mtp.MtpDevice`** on top of **`UsbManager`** (USB host mode, API 12+). Everything the app needs is there on API 26: storages (`getStorageIds`, `getStorageInfo`: name, free and total space), folder listing (`getObjectHandles(storage, 0, parent)` + `getObjectInfo`), the device's **own thumbnails** (`getThumbnail`: a ~160 px JPEG made by the camera or phone, so no download is needed for tiles), chunked reads (`getPartialObject`, API 24), whole-file copies (`importFile`), and, for later, `deleteObject`, `sendObject` and change events (`readEvent`, API 24).
+- **Permission:** each device needs the user's OK through the system prompt (`UsbManager.requestPermission`); it lasts until the device is unplugged. No manifest permission is needed. Android 12+ requires a mutable `PendingIntent` for the answer.
+- **One owner at a time.** Android's own `MtpDocumentsProvider` (behind the Files app) may already hold the device; `MtpDevice.open` then fails. **verify** on Pixel and Samsung: does the provider let go when the Files app is closed, and is there a reliable way to take over?
+- **The other way, the Storage Access Framework** (the user picks the device in the system picker, files come as `content://` URIs) would also work and avoid the conflict, but the app is built on file paths, and the SAF fallback was left out on purpose (README §6). MTP directly keeps the home screen entry and the device thumbnails.
+- **Phones as devices** show no storages until they are unlocked and set to *File transfer*.
+- **Speed:** a USB 2 MTP link moves 10–40 MB/s, and each `getObjectInfo` is one round trip (2–10 ms), so a folder of 10,000 camera files takes 20–100 s to list. The listing must stream like local folders do, and thumbnails must not wait behind a download.
+- **Slideshow, players and decoders read local files** (Coil, ExoPlayer, `MediaMetadataRetriever`, `GifCodec`). Streaming from the device into each of them would need a data source per decoder; copying into a cache first works with all of them at once.
+- **Linux** is not part of this: the desktop port is on hold (todo §7).
+
+### 9.2 Home screen
+
+- A **Devices** section, shown only while a device is connected, at the top (above *Recent*): plugging one in is usually why the home screen is open.
+- One row per storage of a ready device: *"Canon EOS R6"*, or *"Pixel 8 · Internal shared storage"* when it has several, with the free-space bar of volumes. A tap opens it in the folder view.
+- A device not yet ready is one row with a hint: *"Tap to allow access"* (the system prompt), *"Connecting…"*, *"Unlock the device and choose File transfer, then tap here"*, *"In use by another app — …"*. A tap asks or tries again.
+- Plugging in and unplugging update the section at once (`ACTION_USB_DEVICE_ATTACHED` / `DETACHED`).
+
+### 9.3 Connection
+
+- Every call to one device runs on its own thread, one after another (`MtpDevice` isn't thread-safe). Calls are short: file details 16 at a time, downloads in 1 MB chunks, so thumbnails interleave with a running download.
+- Every call has a watchdog (8 s; listing 30 s; thumbnail 10 s; chunk 20 s). A device that misses one is marked *not responding*: later calls fail at once, and the folder shows *"Device not responding — unplug it and plug it in again"* (README §2.1).
+- **Paths:** `mtp://<USB device id>/<storage id>/<folders>/<name>`. They are valid until the device is unplugged, so they are never added to recent folders, favourites or the slideshow session.
+
+### 9.4 Folder view
+
+- The normal folder view: streaming listing, sort, tile sizes, selection, breadcrumbs (the storage is the root icon), fast scroller.
+- **Thumbnails:** the device's own JPEG for photos and videos; folders and other files keep their icons. No collages, no 5-frame strips on device folders.
+- **File types** from the extension, else from the MTP object format (JPEG, PNG, GIF, MP4, MP3, …); no magic-byte sniffing (it would need a download).
+- **Read-only for now:** no *Delete*, *Move*, *Share*, *Ctrl* + C, new files, favourites or editing. *Open*, *Select*, *Copy to…* and *Open with…* remain.
+- No live updates yet (no folder watcher on the device).
+
+### 9.5 Copy to this device
+
+- *Copy to…* in the tile menu and the selection bar. The folder picker starts in the last local folder. Files and whole folders are copied, with the wait indicator, the file name, and Stop. Name clashes get a *" (1)"* suffix, as local copies do; a stopped copy leaves no partial file.
+
+### 9.6 Slideshow and other apps
+
+- Tapping a photo, GIF or video downloads it (with progress) into a **mirror** in the app's cache, `cache/mtp/<device>/<storage>/<folders>/`, and opens the slideshow over that mirror folder.
+- The folder's other media follow in its order, from the tapped one round to the one before it; each joins the slideshow as soon as it is complete (the mirror folder is a normal watched listing, and downloads are renamed into place). Downloading ahead stops at **2 GB** in the mirror; opening a slideshow from another device folder frees the rest of the mirror first.
+- Leaving the slideshow returns to the device folder, focused on the last item shown.
+- Other files open with other apps (README §3.11) from a downloaded copy.
+- The mirror is emptied at app start and when the device is unplugged.
+- **Limits of this step:** the slideshow knows only the files downloaded so far (a random order shuffles those; *previous* stops at the tapped file until the download wraps round). Very large folders are better copied first.
+
+### 9.7 Unplugging
+
+- The device's folders close with *"Device disconnected"*, and the view goes to the home screen. A running slideshow from it closes the same way.
+
+### 9.8 Still open
+
+1. **Delete on the device** (`deleteObject`) with the same 5 s *Undo* as local files: the file is held back until the snackbar closes, then deleted (no device trash exists).
+2. **Copy to the device** (`sendObject`): *Copy to…* / *Move to…* with a device folder as the destination, and new folders.
+3. **Live updates** from device events (`readEvent`: object added / removed), for a camera shooting while connected.
+4. **Streaming playback** instead of the mirror for long videos: a Media3 `DataSource` over `getPartialObject` (seeking needs random access; **verify** read speed). Also the book player for audio folders on a device.
+5. **Folder collages** from the device thumbnails of the first few files.
+6. **Auto-open:** an intent filter for `USB_DEVICE_ATTACHED` with a device filter (class 6, PTP) so Android offers *"Open Media Viewer?"* when a camera is plugged in; it also grants the permission.
+7. **Remember devices:** a stable key (vendor id, product id and serial number, readable after permission) so recent folders and favourites can point into a device, shown dimmed while it is unplugged.
+8. **Thumbnails for files the device has none for** (some cameras for RAW, many players): download small images (≤ 8 MB) into the mirror and decode them as usual.
+9. **Tests:** `MtpPaths` is covered (`MtpPathsTest`). A fake `MtpConnection` would allow tests of the listing batches, the watchdog and the mirror budget.
+10. **verify** on devices: a Canon / Nikon / Sony camera in PTP mode, an Android phone in MTP mode (locked, then unlocked), a Kindle or MP3 player; 10,000-file listing speed; `getThumbnail` for videos on phones; behaviour when Android's Files app holds the device; unplugging during a download; Android TV boxes with USB host.
+

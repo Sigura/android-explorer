@@ -53,6 +53,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusDirection
@@ -83,7 +84,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -100,7 +100,6 @@ import com.mediaviewer.domain.model.OtherKind
 import com.mediaviewer.ui.common.copyFiles
 import com.mediaviewer.ui.common.formatDuration
 import com.mediaviewer.ui.common.formatSize
-import com.mediaviewer.ui.common.middleEllipsis
 import com.mediaviewer.ui.common.startFileDrag
 import kotlinx.coroutines.delay
 import kotlin.math.min
@@ -388,6 +387,11 @@ private fun TileMenu(entry: FileEntry, browser: BrowserState, offset: DpOffset, 
             if (!entry.isFolder && entry.type != MediaType.PARTIAL) Item("Open with…") { browser.openWith(entry) }
         }
         Item(if (entry.path in browser.selection) "Deselect" else "Select") { browser.select(entry) }
+        // Device folders (todo §9) are read-only: copying to this phone is the one transfer.
+        if (browser.remote) {
+            Item("Copy to…") { browser.transfer(targets, move = false) }
+            return@DropdownMenu
+        }
         Item(if (many) "Share ${targets.size} items" else "Share", enabled = files > 0) { browser.share(targets) }
         Item("Copy (Ctrl+C)", enabled = files > 0) { copyFiles(ctx, targets) }
         Item("Move to…") { browser.transfer(targets, move = true) }
@@ -424,7 +428,7 @@ private fun BoxScope.FailedIcon(state: TileState.Failed) =
     CenterIcon(if (state.timedOut) Icons.Rounded.HourglassDisabled else Icons.Rounded.BrokenImage, "Can't be read")
 
 @Composable
-private fun BoxScope.NameOverlay(name: String, focused: Boolean) {
+private fun BoxScope.NameOverlay(name: String) {
     Box(
         Modifier
             .align(Alignment.BottomCenter)
@@ -432,35 +436,21 @@ private fun BoxScope.NameOverlay(name: String, focused: Boolean) {
             .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
             .padding(horizontal = 6.dp, vertical = 4.dp),
     ) {
-        TileName(name, 40, focused, style = TextStyle(color = Color.White, fontSize = 11.sp), align = Alignment.CenterStart)
+        TileName(name, style = TextStyle(color = Color.White, fontSize = 11.sp), align = Alignment.CenterStart)
     }
 }
 
 /**
- * A tile's name line; long names are shortened in the middle. On TV the focused tile
- * shows the whole name instead and, if it doesn't fit, scrolls it round and round: a remote has
- * no hover or tooltip to read it otherwise.
+ * A tile's name line, never truncated: a name wider than the tile scrolls sideways in a
+ * continuous loop (marquee), so the whole name can be read; one that fits stays still.
  */
 @Composable
-private fun TileName(
-    name: String,
-    max: Int,
-    focused: Boolean,
-    style: TextStyle,
-    modifier: Modifier = Modifier,
-    align: Alignment = Alignment.Center,
-) {
-    val scroll = focused && LocalTileConfig.current.isTv
-    Box(modifier, contentAlignment = align) {
-        if (scroll) {
-            // The marquee only moves when the text is wider than the tile.
-            Text(
-                name, style = style, maxLines = 1,
-                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 800, repeatDelayMillis = 1500),
-            )
-        } else {
-            Text(middleEllipsis(name, max), style = style, maxLines = 1, textAlign = TextAlign.Center)
-        }
+private fun TileName(name: String, style: TextStyle, modifier: Modifier = Modifier, align: Alignment = Alignment.Center) {
+    Box(modifier.clipToBounds(), contentAlignment = align) {
+        Text(
+            name, style = style, maxLines = 1,
+            modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1000, repeatDelayMillis = 1500),
+        )
     }
 }
 
@@ -523,15 +513,15 @@ fun EntryTile(
             MediaType.FOLDER -> FolderContent(entry, input, gate)
             MediaType.IMAGE -> ImageContent(entry, input, gate)
             MediaType.ANIMATED, MediaType.VIDEO -> StripContent(entry, input, gate, selected = entry.path in browser.selection)
-            MediaType.PARTIAL -> OtherContent(entry, Icons.Rounded.Downloading, "incomplete", input.focused)
+            MediaType.PARTIAL -> OtherContent(entry, Icons.Rounded.Downloading, "incomplete")
             MediaType.OTHER ->
-                if (entry.other.hasTextPreview || entry.other == OtherKind.UNKNOWN) TextContent(entry, gate, input.focused)
-                else OtherContent(entry, iconFor(entry.other), formatSize(entry.size), input.focused)
+                if (entry.other.hasTextPreview || entry.other == OtherKind.UNKNOWN) TextContent(entry, gate)
+                else OtherContent(entry, iconFor(entry.other), formatSize(entry.size))
         }
         val cfg = LocalTileConfig.current
         val preview = entry.isMedia || LocalThumbnails.current.cached(entry.path) is Thumb.Text
         val showName = cfg.showNames || input.focused || input.hovered || browser.selectionMode || input.noThumb
-        if (preview && showName) NameOverlay(entry.name, input.focused)
+        if (preview && showName) NameOverlay(entry.name)
         if (playing) PlayingBadge()
     }
 }
@@ -684,7 +674,7 @@ private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: Scr
             Collage(stills)
         }
         TileName(
-            entry.name, 40, input.focused,
+            entry.name,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
         )
@@ -722,10 +712,10 @@ internal fun BoxScope.Collage(stills: List<Still>) {
  * with the extension as a badge. The icon stays until the preview is ready, and for binary files.
  */
 @Composable
-private fun BoxScope.TextContent(entry: FileEntry, gate: ScrollGate, focused: Boolean) {
+private fun BoxScope.TextContent(entry: FileEntry, gate: ScrollGate) {
     val text = ((rememberThumb(entry, gate) as? TileState.Ready)?.thumb as? Thumb.Text)
     if (text == null) {
-        OtherContent(entry, iconFor(entry.other), formatSize(entry.size), focused)
+        OtherContent(entry, iconFor(entry.other), formatSize(entry.size))
         return
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
@@ -741,7 +731,7 @@ private fun BoxScope.TextContent(entry: FileEntry, gate: ScrollGate, focused: Bo
 }
 
 @Composable
-private fun BoxScope.OtherContent(entry: FileEntry, icon: ImageVector, detail: String, focused: Boolean) {
+private fun BoxScope.OtherContent(entry: FileEntry, icon: ImageVector, detail: String) {
     Column(
         Modifier.fillMaxSize().padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -753,7 +743,7 @@ private fun BoxScope.OtherContent(entry: FileEntry, icon: ImageVector, detail: S
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
             modifier = Modifier.weight(1f).fillMaxWidth(0.5f),
         )
-        TileName(entry.name, 32, focused, style = MaterialTheme.typography.labelSmall)
+        TileName(entry.name, style = MaterialTheme.typography.labelSmall)
         Text(detail, maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

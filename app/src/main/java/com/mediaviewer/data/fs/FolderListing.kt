@@ -9,6 +9,7 @@ import com.mediaviewer.domain.model.MediaType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,9 @@ class FolderListing(
     private val scope: CoroutineScope,
     comparator: Comparator<FileEntry>,
     private val showHidden: Boolean,
+    /** Folders on MTP devices (todo §9) are listed by the device connection and not watched. */
+    private val scanner: (String, Boolean) -> Flow<FolderScanner.Event> = FolderScanner::scan,
+    private val watch: Boolean = true,
     private val onFailed: (path: String, reason: String) -> Unit,
 ) {
     enum class Status { LOADING, DONE, STOPPED, FAILED }
@@ -60,7 +64,7 @@ class FolderListing(
         _status.value = Status.LOADING
         // Sorted insertion and the list snapshot per batch stay off the main thread.
         job = scope.launch(Dispatchers.Default) {
-            FolderScanner.scan(path, showHidden).collect { ev ->
+            scanner(path, showHidden).collect { ev ->
                 when (ev) {
                     is FolderScanner.Event.Batch -> insertAll(ev.entries)
                     is FolderScanner.Event.Failed -> {
@@ -73,7 +77,7 @@ class FolderListing(
             _started.value = true
             if (_status.value == Status.LOADING) _status.value = Status.DONE
         }
-        startWatching()
+        if (watch) startWatching()
     }
 
     /** Stop button: keep what is loaded (README §2.1, "Folder listing"). Returns immediately. */

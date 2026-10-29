@@ -24,10 +24,13 @@ import com.mediaviewer.ui.AppViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /**
@@ -74,6 +77,14 @@ class SlideshowController(
     var videoPositionMs = 0L
     /** Playback position of a video or GIF on screen, set by the screen; read when the user leaves it. */
     var positionOf: (FileEntry) -> Long = { 0L }
+    /** Decodes an image into the cache the screen draws it from; the result is kept until the next preload. */
+    var preloadImage: suspend (FileEntry) -> Any? = { null }
+    /**
+     * Bumped when the app is visible again; restarts the timer. Composition is paused while the
+     * app is stopped, so a "stopped" flag that went on and off again would never reach the screen.
+     */
+    var starts by mutableIntStateOf(0)
+        private set
 
     private var order: SlideOrder? = null
     /** Next (+1) / previous (-1) pressed before the folder listing finished. */
@@ -93,6 +104,13 @@ class SlideshowController(
     private var runningSince = -1L
     /** Identifies the running [tick]; a cancelled one that finishes late must not touch the clock. */
     private var tickToken = 0
+    private var tickJob: Job? = null
+    /** The app is not visible: the clock stops and nothing is skipped as "not ready". */
+    private var stopped = false
+    /** The item ended while paused, in the menu or in the background; it advances when the timer runs again. */
+    private var endedInMenu = false
+    /** Path of the item being preloaded for the next step, and its preload. */
+    private var preload: Pair<String, Job>? = null
     /** Where the last [MAX_VISITS] items were left, so "previous" goes on from there. */
     private val visits = object : LinkedHashMap<String, Visit>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Visit>?) = size > MAX_VISITS
@@ -219,6 +237,7 @@ class SlideshowController(
         timing = null
         meta = null
         tickToken++
+        endedInMenu = false
         elapsedMs = visit?.elapsedMs ?: 0L
         runningSince = -1
         resumePositionMs = when {
@@ -229,9 +248,24 @@ class SlideshowController(
         videoPositionMs = resumePositionMs
         vm.thumbnails.clearFailure(e.path)
         saveSession(force = true)
+        armNotReady(e, auto)
+        if (e.type == MediaType.ANIMATED) {
+            scope.launch {
+                meta = try {
+                    vm.thumbnails.gifMeta(e)
+                } catch (ex: Exception) {
+                    null
+                }
+                if (current === e && ready) timing = SlideTimer.timing(meta?.durationMs, intervalMs())
+            }
+        }
+    }
+
+    private fun armNotReady(e: FileEntry, auto: Boolean) {
         notReadyJob?.cancel()
         notReadyJob = scope.launch {
             if (auto) {
+                if (stopped) return@launch
                 // README §2.1: an automatically reached item not ready within min(R, 3 s) is skipped.
                 delay(minOf(intervalMs(), 3000L))
                 if (!ready) skip(e, "not ready in time")
@@ -244,16 +278,50 @@ class SlideshowController(
                 }
             }
         }
-        if (e.type == MediaType.ANIMATED) {
-            scope.launch {
-                meta = try {
-                    vm.thumbnails.gifMeta(e)
-                } catch (ex: Exception) {
-                    null
+    }
+
+    /**
+     * The activity stopped or started. In the background nothing is composed, so a new item would
+     * never get ready and would be skipped as unreadable, one after another.
+     */
+    fun onVisible(visible: Boolean) {
+        stopped = !visible
+        if (visible) starts++ else tickJob?.cancel()
+        val e = current ?: return
+        if (!automatic || ready) return
+        if (visible) armNotReady(e, auto = true) else notReadyJob?.cancel()
+    }
+
+    /** Starts preloading the item "next" would move to, unless it already is. */
+    private fun preloadNext(): Job? {
+        val n = order?.peekNext() ?: return null
+        preload?.let { (path, job) ->
+            if (path == n.path) return job
+            job.cancel()
+        }
+        val job = scope.async {
+            try {
+                when (n.type) {
+                    MediaType.IMAGE -> preloadImage(n)
+                    MediaType.ANIMATED -> vm.thumbnails.gifMeta(n)
+                    else -> null
                 }
-                if (current === e && ready) timing = SlideTimer.timing(meta?.durationMs, intervalMs())
+            } catch (ex: kotlinx.coroutines.CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                // Not reported here: the item reports its own failure when it is shown.
+                null
             }
         }
+        preload = n.path to job
+        return job
+    }
+
+    /** Moves on once the next item is preloaded; until then the current one stays on screen. */
+    private suspend fun advanceFrom(e: FileEntry) {
+        preloadNext()?.let { withTimeoutOrNull(MAX_PRELOAD_WAIT_MS) { it.join() } }
+        if (current !== e) return
+        if (paused || menuOpen || stopped) endedInMenu = true else next(auto = true)
     }
 
     private fun loadingLabel(e: FileEntry): String {
@@ -304,6 +372,7 @@ class SlideshowController(
                 timing = SlideTimer.timing(null, intervalMs())
             }
         }
+        preloadNext()
     }
 
     /** README §2.1 / §5.3: unreadable items are skipped automatically, with a grouped message. */
@@ -327,7 +396,8 @@ class SlideshowController(
     }
 
     fun onPlaybackEnded(e: FileEntry) {
-        if (current === e && timing?.loop == false && !single && !paused && !menuOpen) next(auto = true)
+        if (current !== e || timing?.loop != false || single) return
+        if (paused || menuOpen || stopped) endedInMenu = true else scope.launch { advanceFrom(e) }
     }
 
     fun setRandom(on: Boolean) {
@@ -389,25 +459,31 @@ class SlideshowController(
         )
     }
 
-    fun peekNext(): FileEntry? = order?.peekNext()
-
     /**
      * Runs the item timer; restarted (by the screen) whenever the item, its timing, pause or the
-     * menu changes. Time already shown is kept across pauses and timing changes, and belongs to
+     * menu changes, and when the app is visible again. Time already shown is kept across pauses and timing changes, and belongs to
      * this item only: [show] resets the clock before a cancelled tick of the previous item ends.
      */
     suspend fun tick() {
         stopClock()
         val token = ++tickToken
+        tickJob = currentCoroutineContext()[Job]
         val t = timing ?: return
         val e = current ?: return
-        if (paused || menuOpen || single) return
+        if (paused || menuOpen || stopped || single) return
+        if (endedInMenu) {
+            advanceFrom(e)
+            return
+        }
         runningSince = SystemClock.uptimeMillis()
         try {
             val playsOnce = !t.loop && e.type == MediaType.VIDEO
+            val left = t.showMs - elapsedMs
+            delay(left - PRELOAD_LEAD_MS)
+            preloadNext()
             // A video that plays once advances when it ends; the timer is only a fallback.
-            delay((t.showMs + if (playsOnce) 2000 else 0) - elapsedMs)
-            if (current === e) next(auto = true)
+            delay(minOf(left, PRELOAD_LEAD_MS) + if (playsOnce) 2000 else 0)
+            if (current === e) advanceFrom(e)
         } finally {
             if (tickToken == token) stopClock()
         }
@@ -417,5 +493,9 @@ class SlideshowController(
         const val MAX_VISITS = 15
         /** Going back to an item with less time than this left starts it over. */
         const val MIN_LEFT_MS = 2_000L
+        /** The next item starts loading once this one is ready, and at the latest this long before it is due. */
+        const val PRELOAD_LEAD_MS = 3_000L
+        /** A preload that takes longer than this no longer holds the current item; the next one is shown anyway. */
+        const val MAX_PRELOAD_WAIT_MS = 30_000L
     }
 }

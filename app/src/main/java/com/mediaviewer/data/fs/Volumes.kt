@@ -13,6 +13,8 @@ data class Volume(
     val removable: Boolean,
     val freeBytes: Long,
     val totalBytes: Long,
+    /** A storage of an MTP / PTP device (todo §9); [path] is an `mtp://` path. */
+    val device: Boolean = false,
 )
 
 /** Storage roots shown on the root screen (README §4 "Root"): internal, SD cards, USB drives. */

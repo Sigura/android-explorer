@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.SdCard
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Usb
@@ -178,6 +179,7 @@ fun stepIn(steps: IntArray, current: Int, dir: Int): Int {
 /** Icon for a storage root; `null` is the file-system root. */
 fun volumeIcon(v: Volume?): ImageVector = when {
     v == null -> Icons.Rounded.Storage
+    v.device -> Icons.Rounded.PhotoCamera
     !v.removable -> Icons.Rounded.PhoneAndroid
     v.label.contains("USB", ignoreCase = true) -> Icons.Rounded.Usb
     else -> Icons.Rounded.SdCard

@@ -39,7 +39,7 @@ class SlideGif(private val file: File, private val startMs: Long) {
     @Volatile var positionMs = startMs
         private set
 
-    /** False while the slideshow is paused or its menu is open: the frame on screen stays. */
+    /** False while the slideshow is paused: the frame on screen stays. */
     val running = MutableStateFlow(true)
 
     /** Plays until cancelled. A file that isn't a GIF, or is too big, ends as [State.UNSUPPORTED]. */

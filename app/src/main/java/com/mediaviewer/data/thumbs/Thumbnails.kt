@@ -16,6 +16,7 @@ import com.mediaviewer.data.fs.FolderScanner
 import com.mediaviewer.data.fs.TAG
 import com.mediaviewer.data.meta.MediaMeta
 import com.mediaviewer.data.meta.MetaStore
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import com.mediaviewer.domain.model.OtherKind
@@ -127,6 +128,9 @@ class Thumbnails(
     /** Text files without a detectable encoding (setting "Text files without encoding"). */
     @Volatile var legacyCharset: Charset = Charsets.ISO_8859_1
 
+    /** The device's own thumbnail of a file on an MTP device (todo §9.4); null when it has none. */
+    @Volatile var remote: (suspend (String) -> ByteArray?)? = null
+
     /** Files whose content turned out not to be text: no preview, no retry this session. */
     private val notText: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -199,7 +203,10 @@ class Thumbnails(
         if (failed.containsKey(entry.path)) throw DecodeFailed(failed[entry.path] == true)
         active.update { it + 1 }
         try {
-            when (entry.type) {
+            if (MtpPaths.isMtp(entry.path)) {
+                // Device files: only the thumbnail the device made; folders and other files keep their icon.
+                if (entry.isMedia) remoteStill(entry.path, width, height)?.let { emit(cachePut(entry.path, width, Thumb.Image(it))) }
+            } else when (entry.type) {
                 MediaType.IMAGE -> emit(cachePut(entry.path, width, Thumb.Image(still(entry.path, width, height))))
                 MediaType.ANIMATED -> gif(entry, width, height, full, firstOnly) { emit(it) }
                 MediaType.VIDEO -> video(entry, width, height, firstOnly) { emit(it) }
@@ -308,6 +315,22 @@ class Thumbnails(
         return Still(bmp.asImageBitmap(), bmp.width, bmp.height)
     }
 
+    /** A device thumbnail (JPEG, usually 160 px): the device call has its own watchdog, the decode this one. */
+    private suspend fun remoteStill(path: String, w: Int, h: Int): Still? {
+        val bytes = remote?.invoke(path) ?: return null
+        return watchdog(DECODE_MS) {
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+            if (o.outWidth <= 0) throw IllegalStateException("unsupported thumbnail")
+            val s = coverScale(o.outWidth, o.outHeight, w, h)
+            var sample = 1
+            while (o.outWidth / (sample * 2) >= o.outWidth * s && o.outHeight / (sample * 2) >= o.outHeight * s) sample *= 2
+            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                ?: throw IllegalStateException("decode failed")
+            Still(bmp.asImageBitmap(), bmp.width, bmp.height)
+        }
+    }
+
     // ---------------------------------------------------------------- GIF
 
     /** GIF block scan, cached per path + size + mtime. */
@@ -369,6 +392,7 @@ class Thumbnails(
 
     // ---------------------------------------------------------------- video
 
+    /** Also an audio file's duration, for the player's book total (todo §4.3). */
     suspend fun videoMeta(entry: FileEntry): MediaMeta {
         meta.get(entry.path, entry.size, entry.mtime)?.let { return it }
         return watchdog(SCAN_MS) {

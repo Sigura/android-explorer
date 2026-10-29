@@ -48,6 +48,7 @@ import com.mediaviewer.ui.browser.FolderScreen
 import com.mediaviewer.ui.browser.LocalThumbnails
 import com.mediaviewer.ui.common.WaitIndicator
 import com.mediaviewer.ui.editor.EditorScreen
+import com.mediaviewer.ui.playback.FULL_PLAYER_HEIGHT
 import com.mediaviewer.ui.playback.LocalMiniPlayerHeight
 import com.mediaviewer.ui.playback.MINI_PLAYER_HEIGHT
 import com.mediaviewer.ui.playback.MiniPlayer
@@ -174,7 +175,9 @@ private fun AppRoot(vm: AppViewModel, onExit: () -> Unit) {
         // The mini player (todo §4.3) sits over the root and folder screens, never over the slideshow.
         val nowPlaying by vm.bookPlayer.state.collectAsState()
         val showMini = nowPlaying != null && (screen == Screen.Root || screen is Screen.Folder)
-        CompositionLocalProvider(LocalMiniPlayerHeight provides if (showMini) MINI_PLAYER_HEIGHT else 0.dp) {
+        val playerCompact = vm.settings.collectAsState().value.playerCompact
+        val playerHeight = if (playerCompact) MINI_PLAYER_HEIGHT else FULL_PLAYER_HEIGHT
+        CompositionLocalProvider(LocalMiniPlayerHeight provides if (showMini) playerHeight else 0.dp) {
             when (val s = screen) {
                 Screen.Loading -> Unit
                 Screen.Permission -> PermissionScreen(vm)
@@ -187,7 +190,14 @@ private fun AppRoot(vm: AppViewModel, onExit: () -> Unit) {
             }
         }
         val np = nowPlaying
-        if (showMini && np != null && overlay == null) MiniPlayer(np, vm.bookPlayer, Modifier.align(Alignment.BottomCenter))
+        if (showMini && np != null && overlay == null) {
+            MiniPlayer(
+                np, vm.bookPlayer, playerCompact,
+                onCompact = { c -> vm.settingsStore.update { it.copy(playerCompact = c) } },
+                onOpenFolder = { vm.openFolder(np.folder, focus = np.path) },
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
         when (overlay) {
             Overlay.SETTINGS -> SettingsScreen(vm)
             Overlay.ERROR_LOG -> ErrorLogScreen(vm)

@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Icon
@@ -47,6 +48,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
+import com.mediaviewer.data.fs.Volume
+import com.mediaviewer.data.mtp.MtpDevices
 import com.mediaviewer.data.thumbs.Still
 import com.mediaviewer.data.thumbs.Thumb
 import com.mediaviewer.data.thumbs.Thumbnails
@@ -61,13 +64,17 @@ import com.mediaviewer.ui.common.middleEllipsis
 import com.mediaviewer.ui.common.volumeIcon
 import com.mediaviewer.ui.playback.LocalMiniPlayerHeight
 
-/** README §4 "Root": recent folders, favourites and storage volumes. No back tile. */
+/** README §4 "Root": connected devices, recent folders, favourites and storage volumes. No back tile. */
 @Composable
 fun RootScreen(vm: AppViewModel) {
     val volumes by vm.volumes.collectAsState()
     val recent by vm.settingsStore.recent.collectAsState()
     val settings by vm.settings.collectAsState()
-    LaunchedEffect(Unit) { vm.refreshVolumes() }
+    val devices by vm.devices.collectAsState()
+    LaunchedEffect(Unit) {
+        vm.refreshVolumes()
+        vm.mtp.refresh()
+    }
     val pad = WindowInsets.safeDrawing.asPaddingValues()
 
     LazyColumn(
@@ -79,6 +86,28 @@ fun RootScreen(vm: AppViewModel) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Media Viewer", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                 IconButton(onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
+            }
+        }
+        // Cameras and phones over USB (todo §9.2): shown only while one is connected, first, since
+        // plugging one in is usually why the home screen is open.
+        if (devices.isNotEmpty()) {
+            item { SectionTitle("Devices") }
+            for (d in devices) {
+                if (d.state == MtpDevices.State.READY && d.storages.isNotEmpty()) {
+                    items(d.storages, key = { "d:" + it.path }) { v ->
+                        val title = if (d.storages.size == 1) d.name else "${d.name} · ${v.label}"
+                        RootRow(Icons.Rounded.PhotoCamera, title, v.label, onClick = { vm.openFolder(v.path) }) { SpaceBar(v) }
+                    }
+                } else {
+                    item(key = "d:${d.id}") {
+                        val hint = when (d.state) {
+                            MtpDevices.State.NO_ACCESS -> "Tap to allow access"
+                            MtpDevices.State.OPENING -> "Connecting…"
+                            else -> d.message ?: "Can't be opened — tap to try again"
+                        }
+                        RootRow(Icons.Rounded.PhotoCamera, d.name, hint, onClick = { vm.mtp.requestAccess(d.id) })
+                    }
+                }
             }
         }
         if (recent.isNotEmpty()) {
@@ -108,21 +137,23 @@ fun RootScreen(vm: AppViewModel) {
         }
         item { SectionTitle("Storage") }
         items(volumes, key = { "v:" + it.path }) { v ->
-            RootRow(volumeIcon(v), v.label, v.path, onClick = { vm.openFolder(v.path) }) {
-                if (v.totalBytes > 0) {
-                    LinearProgressIndicator(
-                        progress = { 1f - v.freeBytes.toFloat() / v.totalBytes },
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    )
-                    Text(
-                        "${formatSize(v.freeBytes)} free of ${formatSize(v.totalBytes)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            RootRow(volumeIcon(v), v.label, v.path, onClick = { vm.openFolder(v.path) }) { SpaceBar(v) }
         }
     }
+}
+
+@Composable
+private fun SpaceBar(v: Volume) {
+    if (v.totalBytes <= 0) return
+    LinearProgressIndicator(
+        progress = { 1f - v.freeBytes.toFloat() / v.totalBytes },
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
+    Text(
+        "${formatSize(v.freeBytes)} free of ${formatSize(v.totalBytes)}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
