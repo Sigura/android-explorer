@@ -160,10 +160,12 @@ object TextFile {
         return try {
             when {
                 to.path == from.path -> null
-                to.exists() && !caseOnly -> "$name already exists"
                 !from.exists() -> "${from.name} is gone"
+                // A case-only change is the same file on FAT / exFAT, but another file on ext4 / F2FS.
+                to.exists() && !(caseOnly && sameFile(from, to)) -> "$name already exists"
                 caseOnly -> {
-                    val tmp = File(from.parentFile, ".${from.name}.rename")
+                    // A name nothing uses, so the detour can't replace a leftover file either.
+                    val tmp = generateSequence(0) { it + 1 }.map { File(from.parentFile, ".${from.name}.rename$it") }.first { !it.exists() }
                     when {
                         !from.renameTo(tmp) -> "Can't rename ${from.name}"
                         tmp.renameTo(to) -> null
@@ -176,6 +178,12 @@ object TextFile {
         } catch (e: SecurityException) {
             e.message ?: "Can't rename ${from.name}"
         }
+    }
+
+    private fun sameFile(a: File, b: File): Boolean = try {
+        java.nio.file.Files.isSameFile(a.toPath(), b.toPath())
+    } catch (e: IOException) {
+        false
     }
 
     /** Creates a folder. Null on success, else the reason. */

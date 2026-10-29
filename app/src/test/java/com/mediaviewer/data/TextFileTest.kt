@@ -117,4 +117,13 @@ class TextFileTest {
         assertNull(TextFile.rename(a, "Notes.txt"))
         assertEquals(listOf("Notes.txt"), tmp.root.list()!!.toList())
     }
+
+    @Test fun caseOnlyRenameNeverReplacesAnotherFile() {
+        // ext4 here: a.txt and A.txt are two files.
+        val a = tmp.newFile("a.txt").apply { writeText("small") }
+        val big = tmp.newFile("A.txt").apply { writeText("BIG") }
+        assertEquals("A.txt already exists", TextFile.rename(a, "A.txt"))
+        assertEquals("BIG", big.readText())
+        assertEquals("small", a.readText())
+    }
 }
