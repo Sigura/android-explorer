@@ -237,7 +237,7 @@ Requested 2026-10-25.
 
 ## 9. MTP devices: cameras and phones over USB
 
-Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):** the home screen *Devices* section, browsing, device thumbnails, the slideshow from a local mirror, *Copy to…* and *Open with* (README §3.14). The rest of this section is open.
+Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):** the home screen *Devices* section, browsing, device thumbnails, the slideshow from a local mirror, *Copy to…* and *Open with* (README §3.14). **Second step done (2026-10-29, tested against a fake device):** delete with *Undo*, copy and move to and from devices, new folders, live updates, folder collages, auto-open for cameras, thumbnails for files without one (README §3.14). Open: §9.8.
 
 **Goal.** A camera, another phone, an action cam or a media player plugged into the phone or tablet (USB OTG, USB-C) shows up on the home screen. Its photos and videos can be browsed with thumbnails, watched in the slideshow and copied to this device, as easily as an SD card.
 
@@ -267,10 +267,9 @@ Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):
 ### 9.4 Folder view
 
 - The normal folder view: streaming listing, sort, tile sizes, selection, breadcrumbs (the storage is the root icon), fast scroller.
-- **Thumbnails:** the device's own JPEG for photos and videos; folders and other files keep their icons. No collages, no 5-frame strips on device folders.
+- **Thumbnails:** the device's own JPEG for photos and videos; folder collages from those; no 5-frame strips on device folders.
 - **File types** from the extension, else from the MTP object format (JPEG, PNG, GIF, MP4, MP3, …); no magic-byte sniffing (it would need a download).
-- **Read-only for now:** no *Delete*, *Move*, *Share*, *Ctrl* + C, new files, favourites or editing. *Open*, *Select*, *Copy to…* and *Open with…* remain.
-- No live updates yet (no folder watcher on the device).
+- No *Share*, *Ctrl* + C, new text files, favourites or editing (the files aren't on this phone).
 
 ### 9.5 Copy to this device
 
@@ -291,17 +290,10 @@ Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):
 
 ### 9.8 Still open
 
-1. **Delete on the device** (`deleteObject`) with the same 5 s *Undo* as local files: the file is held back until the snackbar closes, then deleted (no device trash exists).
-2. **Copy to the device** (`sendObject`): *Copy to…* / *Move to…* with a device folder as the destination, and new folders.
-3. **Live updates** from device events (`readEvent`: object added / removed), for a camera shooting while connected.
-4. **Streaming playback** instead of the mirror for long videos: a Media3 `DataSource` over `getPartialObject` (seeking needs random access; **verify** read speed). Also the book player for audio folders on a device.
-5. **Folder collages** from the device thumbnails of the first few files.
-6. **Auto-open:** an intent filter for `USB_DEVICE_ATTACHED` with a device filter (class 6, PTP) so Android offers *"Open Media Viewer?"* when a camera is plugged in; it also grants the permission.
-7. **Remember devices:** a stable key (vendor id, product id and serial number, readable after permission) so recent folders and favourites can point into a device, shown dimmed while it is unplugged.
-8. **Thumbnails for files the device has none for** (some cameras for RAW, many players): download small images (≤ 8 MB) into the mirror and decode them as usual.
-9. **Tests:** `MtpPaths` is covered (`MtpPathsTest`). A fake `MtpConnection` would allow tests of the listing batches, the watchdog and the mirror budget.
-10. **verify** on devices: a Canon / Nikon / Sony camera in PTP mode, an Android phone in MTP mode (locked, then unlocked), a Kindle or MP3 player; 10,000-file listing speed; `getThumbnail` for videos on phones; behaviour when Android's Files app holds the device; unplugging during a download; Android TV boxes with USB host.
-
+1. **Streaming playback** instead of the mirror for long videos: a Media3 `DataSource` over `getPartialObject` (seeking needs random access; **verify** read speed). Also the book player for audio folders on a device.
+2. **Remember devices:** a stable key (vendor id, product id and serial number, readable after permission) so recent folders and favourites can point into a device, shown dimmed while it is unplugged.
+3. **Copy on the device without the round trip:** `CopyObject` / `MoveObject` exist in MTP but not in `android.mtp.MtpDevice`; device → device copies go through a local temporary file.
+4. **verify** on devices: a Canon / Nikon / Sony camera in PTP mode, an Android phone in MTP mode (locked, then unlocked), a Kindle or MP3 player; 10,000-file listing speed; `getThumbnail` for videos on phones; `sendObject` and new folders on cameras (some refuse unknown formats); events from cameras; deleting full folders; behaviour when Android's Files app holds the device; unplugging during a download or upload; auto-open while the app is already open (`singleTop`); Android TV boxes with USB host.
 
 ---
 
@@ -317,7 +309,7 @@ Requested 2026-10-29. Plan first, then the work; the findings of the research it
 | 10.4 | Full player screen, speed, sleep timer, shuffle, chapters, lyrics | build | **done** (README §2 Listening, §3.12); open: §4.6 |
 | 10.5 | Drop files and folders into the app (DeX, Chromebooks, split screen) | research + build (files) | **done** for the folder grid (README §2 Desktops, §3.9); open: research doc §5 |
 | 10.6 | Text editor: find, rename from the editor | build | **done** (README §2 Text editor) |
-| 10.7 | Storage Access Framework fallback (for a Play Store build) | research | **done**: options and a recommendation in the research doc §7; needs an owner decision |
+| 10.7 | Storage Access Framework fallback (for a Play Store build) | research | **done**: options and a recommendation in the research doc §7. **Not planned** (owner, 2026-10-29): no Play Store release is planned; revisit before one (first step: the Play declaration as a file manager, no code) or for devices that can't grant "All files access" (some Android TV boxes) |
 | 10.8 | Text editor: colour themes and richer colouring | build | planned, below; prompt in [docs/NEXT_SESSION_EDITOR.md](docs/NEXT_SESSION_EDITOR.md) |
 | 10.10 | SVG, APNG, MediaStore first frames, drops onto tiles, paste | build | **done** (below) |
 | 10.9 | Text editor and text previews: the best monospaced font available | build | **done**: JetBrains Mono NL bundled (README §6, *Code font*) |

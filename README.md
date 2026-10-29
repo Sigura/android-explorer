@@ -31,7 +31,7 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
 | Storage roots: internal storage, SD cards, USB drives, favourite folders, recent folders                                                              | ✅                           |
 | USB drives and SD cards appear in and disappear from *Storage* on the home screen as they are mounted and removed                                       | ✅ (untested on a device)    |
-| Cameras and phones over USB (MTP / PTP): *Devices* on the home screen, browsing with the device's thumbnails, slideshow, *Copy to…* (§3.14; read-only) | ◐ untested on a device       |
+| Cameras and phones over USB (MTP / PTP): *Devices* on the home screen, browsing with the device's thumbnails and folder collages, slideshow, delete with *Undo*, copy and move both ways, new folders, live updates, auto-open for cameras (§3.14) | ◐ untested on a device; tested against a fake device |
 | "All files access" on Android 11+, classic storage permissions on 8–10, hint for devices without the settings screen                                  | ✅                           |
 | Falls back to the app's App info page when the "All files access" screen is missing, or after "Don't ask again" on 8–10                               | ✅                           |
 | Streaming folder listing: tiles appear while a 30k-file folder is still being read, already in sorted order                                           | ✅                           |
@@ -188,7 +188,8 @@ Names of media tiles show on focus, hover and in selection mode, or always with 
 **Selection mode** shows a bar with the count and **Select all**, **Invert**, **Share**, **Move / Copy to…** and **Delete**. Dragging after a long press selects a range, and the grid scrolls when the finger nears the top or bottom. Selection ends when nothing is selected, on Back, or when you change folder.
 
 - **Delete** asks nothing: an *Undo* snackbar stays for 5 s, and only after that is the file really removed (§3.6).
-- **Move / Copy to…** opens a folder picker (current folder, volumes, favourites, recent). Moves within a volume are instant renames. Copies show progress and can be stopped; a half-copied file is removed. Existing files are never overwritten: the copy gets a `name (1).ext` name.
+- **Move / Copy to…** opens a folder picker (current folder, volumes, connected devices, favourites, recent). Moves within a volume are instant renames. Copies show progress and can be stopped; a half-copied file is removed. Existing files are never overwritten: the copy gets a `name (1).ext` name.
+- **On a device folder** (camera or phone over USB, §3.14) the same bar has no **Share**; delete, move and copy work in both directions, and the top bar's `+` makes a new folder there (no text files).
 
 ### Text editor
 
@@ -378,6 +379,9 @@ app/src/main/java/com/mediaviewer/
   data/fs/       FileTypes, FolderScanner, FolderListing, Volumes, Trash, FileOps,
                  TextFile (editor load / save / create / rename), Drafts (unsaved editor text),
                  DropImport (files dropped from other apps)
+  data/mtp/      MtpDevices (USB devices, permission, storages), MtpConnection (calls, watchdog, listing,
+                 delete, upload, events; pure Kotlin over MtpDriver), AndroidMtpDriver (android.mtp.MtpDevice),
+                 MtpMirror (local copies, 2 GB budget), MtpTransfer (copy / move with a device), MtpPaths
   data/thumbs/   Thumbnails (scheduler, LRU, watchdogs), GifCodec (scanner + decoder),
                  WebpAnim (animated WebP container: scan, frames, key frames), ApngAnim (APNG chunks, frames, compositing order),
                  ZipIndex + DocCovers (covers inside EPUB / CBZ / ODF / OOXML / FB2),
@@ -534,13 +538,17 @@ Tiles of text files show their first lines instead of an icon.
 
 ### 3.14 MTP devices (cameras and phones over USB)
 
-Spec and open work: [todo §9](todo.md#9-mtp-devices-cameras-and-phones-over-usb). Read-only for now; untested on a device.
+Spec and open work: [todo §9](todo.md#9-mtp-devices-cameras-and-phones-over-usb). Untested on a device; the connection, mirror and transfers are tested against an in-memory fake device (`FakeMtpDriver`: storages, folders, thumbnails, events, slow, hanging and failing calls).
 
 - **Finding devices** (`data/mtp/MtpDevices`, one per app): `UsbManager` devices with a still-image interface (PTP) or a vendor interface named `MTP`; a receiver follows plugging, unplugging and the answer to the system permission prompt. A device with permission is opened at once (`MtpDevice.open`); its storages become `Volume`s with `device = true` and `mtp://<device id>/<storage id>` paths (`MtpPaths`). The home screen shows them under **Devices**; a device that isn't ready shows why, and a tap asks again.
-- **Calls** (`MtpConnection`): every call to a device runs on that device's own thread, under a watchdog; after a timeout the device counts as *not responding* and later calls fail at once. Calls are short (file details 16 at a time, 1 MB chunks), so tiles get their thumbnails while a download runs.
-- **Folders:** `FolderListing` takes the device scanner instead of `FolderScanner` and doesn't watch the folder. Entries have `mtp://` paths; types come from the extension or the MTP object format. `Thumbnails.load` uses the device's own thumbnail (`getThumbnail`) for media; folders and other files keep their icons. `BrowserState.remote` turns off delete, move, share, copy to clipboard, new files, favourites and editing.
+- **Calls** (`MtpConnection`, pure Kotlin over `MtpDriver`; `AndroidMtpDriver` wraps `android.mtp.MtpDevice`): every call to a device runs on that device's own thread, under a watchdog (8 s; listing and deletes 30 s; thumbnail 10 s; chunk 20 s; a whole-file transfer 20 s + 1 s per MB); after a timeout the device counts as *not responding* and later calls fail at once. A caller that leaves (Stop, a tile scrolled away) is not a timeout. Calls are short (file details 16 at a time, listing batches of at most 50, 1 MB chunks), so tiles get their thumbnails while a download runs.
+- **Folders:** `FolderListing` takes the device scanner instead of `FolderScanner`, and device events instead of a folder watcher. Entries have `mtp://` paths; types come from the extension or the MTP object format. `Thumbnails.load` uses the device's own thumbnail (`getThumbnail`) for media; an image the device has no thumbnail for (some RAW + JPEG cameras, players), if the platform decodes it and it is at most 8 MB, is downloaded into the mirror and decoded. **Folder tiles** get a collage of the device thumbnails of the first media files (up to 8 candidates among the first 64 objects; no thumbnails, no collage). `BrowserState.remote` turns off share, copy to clipboard, new text files, favourites and editing.
+- **Live updates:** each connection reads device events (`readEvent`) on a thread of its own. *Object added* and *object info changed* read the object's details and add or replace it in the open folder (only folders listed in this session are known by handle); *object removed* takes it out (and its mirror copy); storage events re-read the device's storages. A device that sends no events (**verify** on PTP cameras) just has no live updates.
+- **Delete** (`AppViewModel.deleteOnDevice`): devices have no trash, so a deleted file only leaves the listing while the 5 s *Undo* snackbar shows; `deleteObject` runs when it closes. A folder the device won't delete in one go is emptied first (**verify** which cameras need it). A failed delete puts the file back with *"Couldn't delete …"*. Deleting in a device slideshow deletes the device file and its mirror copy.
+- **Copy and move with a device** (`MtpTransfer`): the folder picker lists device storages and folders. This device → device: `sendObjectInfo` + `sendObject` (one call per file; Stop takes effect when it ends, and a file whose copy was stopped is deleted on the device); folders with `ASSOCIATION` objects. Device → this device: downloads as before. Device → device: through a temporary copy in `cache/mtp-transfer`. Clashes get `(1)` names, compared without case as device storages do. A move deletes each original after its copy. **New folder** in a device folder (`+`, `Shift` + N).
+- **Auto-open:** an intent filter for `USB_DEVICE_ATTACHED` with a still-image (class 6, PTP) device filter: Android offers *Open Media Viewer?* when a camera is plugged in, which also grants access. The device's storage opens once it is ready (several storages: the home screen). Phones in MTP mode use a vendor interface the filter can't name, so they are found as before. `MainActivity` is `singleTop`, so a camera plugged in while the app is open reaches it through `onNewIntent` (**verify**).
 - **Slideshow:** `AppViewModel.openDeviceSlideshow` downloads the file into `cache/mtp/…` (a `.part` file renamed when complete), parks the device folder's listing, and opens the slideshow over a normal listing of the mirror folder. A background job downloads the folder's other media in order, up to 2 GB in the mirror; the mirror's folder watcher adds each one to the slideshow. Closing it brings back the parked listing, focused on the device path of the last item. The mirror is deleted at start and when a device is unplugged; slideshow sessions in it are never resumed.
-- **Copy to…** (`MtpDevices.importTo`): files and folders (recursively) into a local folder, with `FileOps.freeName` for clashes. **Open with** downloads first and passes the local copy.
+- **Open with** downloads first and passes the local copy.
 - **Unplugging:** the devices flow drops the device; a folder or slideshow from it closes with *"Device disconnected"*.
 
 ---
@@ -583,7 +591,7 @@ The script checks Java, the SDK and the Gradle wrapper first, and prints fix com
 
 ### Checking without the Android SDK
 
-`tools/pure-tests.sh` runs the pure-Kotlin tests and `tools/typecheck/run.sh` type-checks the whole app, both without Gradle or the SDK (docs/RESEARCH_2026-10.md §0). They download `kotlinc` and their jars on the first run, outside the repo.
+`tools/pure-tests.sh` runs the pure-Kotlin tests and `tools/typecheck/run.sh` type-checks the whole app, both without Gradle or the SDK (docs/RESEARCH_2026-10.md §0). They download `kotlinc` and their jars on the first run, outside the repo. The pure tests include the MTP connection, mirror and transfers against `FakeMtpDriver` (`MtpConnectionTest`, `MtpMirrorTest`, `MtpTransferTest`: listing batches, the watchdog, the 2 GB budget, delete, uploads, events), with one-line stubs of `Log` and `SystemClock`.
 
 ### Unit tests
 
@@ -682,8 +690,8 @@ GIF decode speed on the dev machine (desktop JVM, files from page cache): block 
 - **Animated AVIF strips.** Android offers no way to seek inside these animations (`AnimatedImageDrawable` only plays), so tiles show the first frame; animated WebP and APNG have their own readers now (§3.4), AVIF would need the AV1 decoder through `MediaCodec` (docs/RESEARCH_2026-10.md §2). The slideshow animates both, for R seconds, looped.
 - **APNG** is shown as a still everywhere: the platform decoders only read its first frame.
 - **FFmpeg video decoding.** The bundled FFmpeg extension decodes *audio*; its video renderer is still experimental in Media3, so video codecs depend on the device's decoders. Rare AVI video codecs (MJPEG, old DivX on some devices) may not play, and their thumbnails show the broken-file icon. Everything in the reference folder is H.264 + AAC.
-- **MTP devices (§3.14)** are read-only and untested on a device: delete, copy to the device, live updates, streaming without the mirror and folder collages are open (todo §9.8). Android's Files app may hold a device so that this app can't open it (**verify**).
-- **Storage Access Framework fallback**: not built. Options (Play declaration as a file manager, a media-only flavor, a full SAF layer) and a recommendation are in docs/RESEARCH_2026-10.md §7; it waits for an owner decision.
+- **MTP devices (§3.14)** are untested on a device (tested against a fake one): `sendObject` and folder creation on cameras, events from PTP cameras, folder deletes, auto-open while the app is open. Streaming without the mirror and remembered devices are open (todo §9.8). Android's Files app may hold a device so that this app can't open it (**verify**).
+- **Storage Access Framework fallback**: not built. Options (Play declaration as a file manager, a media-only flavor, a full SAF layer) and a recommendation are in docs/RESEARCH_2026-10.md §7. Not planned while no Play Store release is planned (owner, 2026-10-29).
 - **Generated Baseline Profile.** The bundled profile is a broad hand-written rule for the app's own code; a profile recorded with Macrobenchmark on a device would be more precise.
 - **Text previews and opening with other apps (§3.10, §3.11)** are untested on a device: the external players' `"position"` extras, the Cyrillic charset check on real files, and the text rendering need a check.
 - **The text editor (§3.13)** is untested on a device: typing speed in a 1 MB file and colouring speed near the 200 K limit on a low-end phone, the on-screen keyboard over the text, pinch next to text selection, `Tab` and `Esc` with DeX keyboards, and the safe save (rename over the file) on SD cards and USB drives (FAT / exFAT through FUSE).
