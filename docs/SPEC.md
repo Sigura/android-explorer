@@ -141,7 +141,7 @@ Real folders are messy. The scanner and decoders must handle all of these, which
 - **Partial downloads:** `*.crdownload` and `*.part`. Show them as "incomplete" files with a `downloading` icon and don't try to decode them, but still allow delete.
 - **Broken files:** 0-byte or truncated GIFs. Show a `broken_image` icon instead of a thumbnail, never crash or retry in a loop, and skip them in the slideshow.
 - **Hidden metadata:** `.directory` (Dolphin), `.ipynb_checkpoints/`, `.nomedia`, `.thumbnails/`. Hide them by default (see settings).
-- **File names** up to 255 bytes, including non-ASCII characters. Truncate names in the middle with an ellipsis so the extension stays visible.
+- **File names** up to 255 bytes, including non-ASCII characters. Names are not truncated on tiles: a name wider than its tile scrolls horizontally in a continuous loop (marquee), so the full name can be read.
 
 ---
 
@@ -159,6 +159,9 @@ The top bar also has a small **thumbnail-size slider**. It steps through the sam
 4. **Other files** (icons)
 
 Each group is sorted by name using natural sort, so `img2` comes before `img10`. Other sort orders are in settings (§9).
+
+- A folder **without images or GIFs** is always sorted by name, ascending (`a1`, `a2`, `a10`); the sort from settings applies to folders with images.
+- The top bar has a **sort menu** for the open folder: name or date modified, ascending or descending. The choice is kept **per folder** between runs; *Default order* forgets it. The slideshow follows the folder's order.
 
 ### Root
 
@@ -327,7 +330,7 @@ Swipe direction follows the original request. An **"Invert swipe direction"** op
 
 ## 6. Slideshow menu (overlay)
 
-A semi-transparent bottom sheet / overlay. The slideshow timer pauses while it is open. It contains:
+A semi-transparent bottom sheet / overlay. The slideshow timer pauses while it is open, so the slideshow does not advance; a video or GIF on screen keeps playing. A video that plays once and ends while the menu is open advances when the menu closes. It contains:
 
 1. **Interval slider** for R, from 1 s to 40 s in 1 s steps, with the current value shown. It applies immediately and is saved.
 2. **Random order** toggle. When on, items are shown in random order with **no repeats until every item has been shown once**. Then a new random cycle starts.

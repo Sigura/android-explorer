@@ -73,7 +73,7 @@ Written 2026-10-25. The findings that led to these choices are in §13. Items ma
 | Editor | **GtkSourceView 5** | Syntax colours for 150+ languages with light and dark schemes, undo and redo, search and replace, line numbers, current-line highlight. Replaces the Android app's own lexers and undo (`Highlight.kt`, `EditHistory.kt`). |
 | Still images | `image` 0.25 (PNG, WebP, BMP, TIFF, ICO; JPEG through `zune-jpeg`), `kamadak-exif` for orientation and embedded thumbnails | Pure Rust: a broken file can't crash the app, so these decode in process. |
 | HEIC, AVIF, JXL | `libheif-rs` (libheif 1.17 on Ubuntu 24.04), `jxl-oxide` (pure Rust) | libheif is C, so it runs in a helper process (§3.3). |
-| GIF | Own codec: the `gif` crate for blocks and LZW, plus a port of `GifCodec`'s compositing, block scan and strip pass (§7.3) | Matches Pillow, like the Android codec. |
+| GIF | Own codec: a port of `GifCodec` (block scan, LZW, compositing, strip pass, frame reader; §7.3) | Matches Pillow, like the Android codec. |
 | Video frames, durations | GStreamer (`uridecodebin3` + `appsink`, accurate seeks) in a helper process | Same codecs as playback; a crash or hang kills only the helper. |
 | Files | GIO (`gio::File`, `FileMonitor`, `VolumeMonitor`, `File::trash`, `AppInfo`, `gtk::FileLauncher`, `gtk::FileDialog`) | Native trash (shows in Files), mount events, the *Open with* portal dialog, and the native folder picker. |
 | Archives | `zip`, `sevenz-rust2`, `tar` + `flate2` / `xz2` / `zstd` / `bzip2` / `lz4_flex`; `unrar` (extract only, helper process) | Compress and extract without depending on installed tools (§4.12) |
@@ -102,7 +102,7 @@ Written 2026-10-25. The findings that led to these choices are in §13. Items ma
 ### 3.1 Crates
 
 ```
-media-viewer/                  (Cargo workspace; new repository, or a linux/ folder here)
+linux/                         (Cargo workspace in this repository, decided; package names in §12.1)
   core/        pure Rust, no GTK: FileEntry, natural order, sorting, smart crop, slide timer,
                slide order (random cycles), Book + Playlist, TextDecode, TextFile (load/save/create),
                Drafts, file types + magic sniffing, GIF codec. Unit tests (ported from the Kotlin tests).
@@ -186,7 +186,7 @@ This is stronger than Android, where `MediaMetadataRetriever` runs in the media 
 
 - **Window:** `AdwApplicationWindow` with `AdwOverlaySplitView` (sidebar | content) and `AdwToolbarView` (header bar on top, mini player at the bottom). The size, position-independent maximised state and sidebar width are saved. Below 600 px the sidebar collapses into an overlay (F9 or ☰ shows it).
 - **Sidebar** replaces the Android root screen: **Favourites as an expandable folder tree** (shared with Files' bookmarks), **Recent**, **This computer** (home, file system, drives as tree roots) and **Trash**; details in §4.11. A drive being removed → toast *"Storage removed"*, and the view moves to the nearest existing parent (README §3.5).
-- **Header bar:** back / forward (folder history, `Alt` + ← / →, mouse buttons 8 / 9), the **path bar** (breadcrumbs with folder menus that turn into a location entry with suggestions, §4.2), search (`Ctrl` + F: filter by name, as you type), **▶ Play / 🎧 Listen** (`P`, same rules as Android §2 Listening), the **view menu** ⊞ (thumbnail size slider, *Automatic size*, tile mode smart / crop / fit, *Show hidden files* `Ctrl` + H, *Always show names*), the **sort menu** ⇅ (name / date / size / type, descending, folders first), and the **main menu** ⋮ (*New tab* `Ctrl` + T, *New window* `Ctrl` + N, *New text file…* `Ctrl` + Alt + N, *New folder…* `Shift` + `Ctrl` + N, *Add to favourites* `Ctrl` + D, *Undo* / *Redo* `Ctrl` + Z / `Ctrl` + `Shift` + Z, *Paste* `Ctrl` + V, *Select by pattern…* `Ctrl` + S, *Open in Terminal*, *Preferences* `Ctrl` + `,`, *Error log*, *Keyboard shortcuts* `Ctrl` + ?, *About*).
+- **Header bar:** back / forward (folder history, `Alt` + ← / →, mouse buttons 8 / 9), the **path bar** (breadcrumbs with folder menus that turn into a location entry with suggestions, §4.2), search (`Ctrl` + F: filter by name, as you type), **▶ Play / 🎧 Listen** (`P`, same rules as Android §2 Listening), the **view menu** ⊞ (thumbnail size slider, *Automatic size*, tile mode smart / crop / fit, *Show hidden files* `Ctrl` + H, *Always show names*), the **sort menu** ⇅ (*Automatic*, name, date modified, size, type; ascending / descending; folders first; *Use for all folders*; remembered per folder, §4.3), and the **main menu** ⋮ (*New tab* `Ctrl` + T, *New window* `Ctrl` + N, *New text file…* `Ctrl` + Alt + N, *New folder…* `Shift` + `Ctrl` + N, *Add to favourites* `Ctrl` + D, *Undo* / *Redo* `Ctrl` + Z / `Ctrl` + `Shift` + Z, *Paste* `Ctrl` + V, *Select by pattern…* `Ctrl` + S, *Open in Terminal*, *Preferences* `Ctrl` + `,`, *Error log*, *Keyboard shortcuts* `Ctrl` + ?, *About*).
 - The header bar stays visible; it doesn't hide on scroll. On a desktop the space is there, and a bar that moves under the pointer is annoying.
 - **Floating status** (like Files): item count, or the selection count and total size, bottom-right over the grid, only while there is a selection or while the folder is still listing (*"Reading… 12,480 items"*).
 - **Toasts** (`AdwToastOverlay`) replace snackbars, with the same grouping (*"12 files couldn't be read"* + **Details**) and **Undo** for delete and other file operations (§4.12). A **progress ring** in the header bar appears while file operations run (§4.12).
@@ -249,7 +249,12 @@ With the path bar focused, ← / → move between segments and Enter opens the f
 
 ### 4.3 Folder grid
 
-- **Order:** `..` tile (shown only when there is a parent; it's also `Backspace` / `Alt` + ↑), folders, media, other files; natural sort; default date, newest first. The sort and *folders first* are global settings, as on Android. **Later:** per-folder sort.
+- **Order:** `..` tile (shown only when there is a parent; it's also `Backspace` / `Alt` + ↑), folders, media, other files. Names always compare in natural order (`a1`, `a2`, `a10`), also as the tie-break for equal dates and sizes.
+- **Sort options** (sort menu ⇅ in the header bar, and clicking a column header in list view): **Name** (natural order), **Date modified**, Size, Type; **Ascending / Descending**; *Folders first*. The default is **Automatic**:
+  - **folders with images or GIFs** sort by date modified, newest first (photo and GIF folders, as on Android);
+  - **every other folder** (documents, audio, books, lectures, source code, folders of folders) sorts by **name, ascending**.
+  - A folder seen for the first time starts in name order; if the first listing batch (§3.2) contains images or GIFs, it switches to date order in that one splice. The result is remembered (below), so the next visit starts in the right order with no switch. An image found only later in the listing doesn't re-sort the folder.
+- **Sort is remembered per folder, between runs** (default on; setting *Remember sort per folder*). Choosing a sort in the menu applies to the open folder only and is saved for it in `state.json` (§9); *Automatic* in the menu removes the folder's own choice. *Use for all folders* makes the current choice the default for folders without one. Saved choices: up to 5,000 folders, least recently opened dropped first; a renamed or moved folder starts over with *Automatic*. The slideshow follows the folder's sort (README §2 Slideshow).
 - **Thumbnail size:** automatic from the window width until changed (one column per ~200 px at scale 1), steps of 16 px from 96 to 512 px. `Ctrl` + wheel, touchpad pinch, `Ctrl` + `+` / `-` / `0` (0 = automatic) and the slider in the view menu. Kept between runs.
 - **Fast-scroll thumb** on the right edge, with a bubble showing the letter, date or size of the item at that position, by the current sort.
 - **Tiles** behave as in README §2 "Tiles":
@@ -257,7 +262,8 @@ With the path bar focused, ← / → move between segments and Enter opens the f
   - **Image:** smart crop (crop if ≤ 10 % is lost, else fit; mode and threshold are settings).
   - **GIF / video:** 5 frames at 10–90 %. The **pointer position** over the tile picks the frame (scrub); resting the pointer, or keyboard focus, cycles them every ~400 ms. Badge `GIF` or the duration; ↗ for long videos that open externally. Large GIFs (default > 40 MB) show the first frame until hovered, then a small ring while the strip is made. While the folder is still listing, only first frames.
   - **Other files:** a symbolic icon by type (from the icon theme, by MIME type), name and size; partial downloads and broken / timed-out files get their own icons. Text and code files show **text previews** (README §3.10: first lines, monospace for code, the tile's text colour on a paper background, extension badge). PDFs, e-books, comics, office files, fonts, audio covers and more get real previews (§7.8); the icon is only the fallback.
-  - **Names:** shown on hover, focus and selection, or always (setting). Long names are shortened in the middle. Media tiles without a thumbnail always show the name. A **tooltip** after 700 ms shows the full name, size, date and, for media, the resolution and duration.
+  - **Names:** shown on hover, focus and selection, or always (setting). Long names scroll (below). Media tiles without a thumbnail always show the name. A **tooltip** after 700 ms shows the full name, size, date and, for media, the resolution and duration.
+  - **Scrolling names** (marquee, like a news ticker): a name **wider than its tile is never truncated**; it scrolls sideways in a **continuous loop** so the whole name can be read: 1 s still, then ~40 px/s to the end, 1.5 s still, back to the start, repeated for as long as the name is on screen. Names that fit stay still. Every visible cut-off name scrolls (as on Android); the animation runs only on visible tiles, pauses while the grid is scrolling, and is drawn with a clip and a frame-clock offset, never by changing the label text. Off with reduced motion (§4.10) and with setting *Scroll long names* (default on), which bring back names shortened in the middle. The same applies to names in list view (§4.13).
 - **HiDPI:** thumbnails are decoded at `tile px × scale factor`; a tile that becomes > 25 % wider (window maximised, moved to a HiDPI monitor, size changed) is decoded again after 300 ms of steady size; the old one stays meanwhile (README §3.4).
 
 ### 4.4 Mouse, keyboard and touchpad
@@ -380,7 +386,9 @@ Double-clicking a media file opens the **viewer** inside the main window, not in
 
 - **▶ / 🎧** in the header bar and *Listen* in a folder's context menu: same folder kinds (audio, mixed, lecture), queue order (`.m3u` / `.m3u8`, then natural order), resume and smart rewind (5 s after a pause > 1 min, 20 s after > 1 h) as README §2 Listening and §3.12.
 - **Player:** one GStreamer `playbin3` with the video flag off, so lectures are decoded as audio only. Speed through `playbin3` rate (0.5–3×). Volume follows the system.
-- **Mini player** at the bottom of the main window: cover, file, book, position, −30 s, play / pause, +30 s, ✕ (stop while paused). Click opens the **player page** (later; todo.md §4).
+- **Mini player** at the bottom of the main window: cover, file, book, position, **⏮ previous file**, −30 s, play / pause, +30 s, **⏭ next file**, ✕ (stop while paused). Click opens the **player page** (later; todo.md §4).
+  - **⏮ / ⏭** are icon buttons (`media-skip-backward-symbolic` / `media-skip-forward-symbolic`) with tooltips and accessible labels. ⏮ within the first 3 s of a file goes to the previous file, later to the start of the current one (todo.md §3); ⏭ goes to the next file. ⏮ is disabled on the first file (within its first 3 s), ⏭ on the last. Keys while the mini player has the focus: `Shift` + ← / →. MPRIS *Previous* / *Next* and the keyboard and headset media keys do the same.
+  - **The playing file is selected:** when the book's folder is open in a grid or list, the playing file's tile carries a *now playing* badge (a speaker icon), and on every file change it becomes the selection and is scrolled into view without taking the keyboard focus. It replaces the selection only when nothing or just the previously playing file is selected, so a selection the user is making is never lost. Opening the book's folder (a click on the book name in the mini player) selects and shows the playing file the same way.
 - **MPRIS:** the GNOME Shell media widget, the lock screen, keyboard media keys and Bluetooth headsets control it. *Play* after the app was closed is not possible without a running process. **Decision:** closing the last window while a book plays keeps the app running in the background, playing, with the MPRIS controls (`gio::Application::hold`); setting *Keep playing after the window is closed* (default on). Quitting (`Ctrl` + Q) stops.
 - History in `history.db` (the same schema as Android), saved every 5 s while playing and at once on pause, seek, file change and quit.
 
@@ -389,11 +397,11 @@ Double-clicking a media file opens the **viewer** inside the main window, not in
 `AdwPreferencesDialog` with the same groups as Android (README §2 Settings), minus the Android-only ones:
 
 - **Slideshow:** interval, transition (fade / slide / none), random order, video muted by default, restore on launch (off / folder only / folder and slideshow).
-- **Folder view:** automatic or fixed thumbnail size, open with single or double click, image tile mode and smart-crop threshold, large-GIF threshold, long videos open externally (off / 1–30 min), text files without an encoding (auto by system language / a fixed code page), sort, descending, folders first, hidden files, always show names.
+- **Folder view:** automatic or fixed thumbnail size, open with single or double click, image tile mode and smart-crop threshold, large-GIF threshold, long videos open externally (off / 1–30 min), text files without an encoding (auto by system language / a fixed code page), default sort (*Automatic*, name, date modified, size, type), descending, folders first, remember sort per folder (default on), hidden files, always show names, scroll long names (default on).
 - **Editor:** open text files in the app, text size, wrap lines, line numbers.
 - **Listening:** keep playing after the window is closed.
 - **Sidebar:** share favourites with Files' bookmarks, reveal the open folder in the tree, number of recent folders (0–50), show Trash.
-- **Files:** default view (grid / list), remember view and sort per folder, restore tabs on start, default archive format and level, follow links when compressing to zip, ask before *Replace* (always on for permanent deletes).
+- **Files:** default view (grid / list), remember view per folder, restore tabs on start, default archive format and level, follow links when compressing to zip, ask before *Replace* (always on for permanent deletes).
 - **Appearance:** style (follow system / light / dark), *Black background in dark style* (AMOLED-like, through CSS).
 - **Maintenance:** clear the thumbnail and metadata caches (strip cache size limit, §7.6), error log, reset settings.
 
@@ -404,7 +412,7 @@ Dropped from Android: *Mouse clicks* (always desktop), *Invert swipe direction* 
 - Every icon button has a tooltip and an accessible label; tiles expose name, type and size to screen readers (`gtk::Accessible` properties).
 - `Ctrl` + ? opens a `GtkShortcutsWindow` with every shortcut above.
 - The app follows the system font size and the *Large text* setting; tile text previews scale with it (README §3.10 sizes, as px at scale 1).
-- Reduced motion (`gtk-enable-animations` off) → no tile cycling, no slideshow transitions.
+- Reduced motion (`gtk-enable-animations` off) → no tile cycling, no slideshow transitions, no scrolling names.
 
 ### 4.11 Sidebar: favourites and folder tree
 
@@ -528,7 +536,7 @@ A dialog with a live preview list (old → new name, conflicts in red):
 | **Recursive search** | `Ctrl` + F filters the open folder by name as you type; a **Search subfolders** toggle (or `Ctrl` + `Shift` + F) searches below it instead, with filters: type (images, GIFs, videos, audio, documents, text), date (today, last week, last month, range), size (> / <). Results stream in under the watchdog, show their folder under the name, and work with the viewer (slideshow over the results), drag and drop and all operations. *Search in file contents* for text files is a later option. |
 | **Folder history** | Back / forward per tab; right-click or long press on ← → shows the last 20 folders. |
 | **Status in the window title** | `trips — Media Viewer`, so window switchers and docks show the folder. |
-| **Remember per folder** (setting, default off) | sort, view (grid / list), thumbnail size; stored in `state.json`, not in the folders. |
+| **Remember per folder** | sort (default on, §4.3); view (grid / list) and thumbnail size (setting, default off); stored in `state.json`, not in the folders. |
 | **Show folder sizes** (optional column in list view) | counted lazily on the IO pool, cached until the folder changes. |
 | **Mount, unmount, eject** | From the sidebar; *Safely remove* waits for writes to finish, with a toast when the drive can be unplugged. |
 | **Startup** | `media-viewer PATH` opens a folder (or a file: its folder with the file selected, or the viewer with `--view`); the last session (tabs, folders, scroll positions) is restored otherwise. |
@@ -576,7 +584,8 @@ Every feature from README §1, with its desktop form and the milestone (§12.3) 
 | Storage roots, favourites, recent folders | Sidebar: Recent, Favourites, Bookmarks, Devices (§4.1) | 1 |
 | All-files permission screens | Not needed | — |
 | Streaming listing in sorted order | Same (§3.4) | 1 |
-| `..`, folders, media, other; natural sort; sort menu | Same | 1 |
+| `..`, folders, media, other; natural sort; folders without images by name; sort menu (name / date modified, ascending / descending) kept per folder between runs | Same, plus size and type in the menu, *Use for all folders*, and the *Automatic* result remembered so a revisit never re-sorts (§4.3) | 1 |
+| Names too long for a tile scroll in a continuous loop (marquee) | Same (§4.3) | 1 |
 | Live updates | `gio::FileMonitor` on the open folder | 1 |
 | Breadcrumbs hiding on scroll | Breadcrumbs in the header bar, always visible; `Ctrl` + L path entry | 1 |
 | Thumbnail size: automatic, pinch, `Ctrl` + wheel, slider | Same, slider in the view menu | 1 |
@@ -601,7 +610,7 @@ Every feature from README §1, with its desktop form and the milestone (§12.3) 
 | Background listening, lock screen, headset | MPRIS, keep playing after the window closes | 4 |
 | Books: positions, smart rewind, playlist order | Same (port of `Book`, `Playlist`, `HistoryStore` schema) | 4 |
 | Lecture folders as audio only | Same (`playbin3` without the video flag) | 4 |
-| Mini player | Bottom bar of the main window | 4 |
+| Mini player with ⏮ / ⏭; the playing file's tile marked and focused | Bottom bar of the main window; the playing file becomes the selection instead of taking the focus (§4.8) | 4 |
 | Desktop clicks, context menu, `Ctrl` / `Shift` + click | The default and only mode | 1 |
 | Drag out, `Ctrl` + C, Delete | Same, plus cut / paste with Files | 3 |
 | Drop files into the app (missing on Android) | Done here (§4.5) | 3 |
@@ -715,7 +724,8 @@ Port `GifCodec.kt` (409 lines) to `core/gif`:
 - **First frame:** a few ms whatever the size.
 - **Strip pass:** one sequential decode keeping the 5 target frames scaled to the tile, stopping after the last; one canvas and one "restore previous" buffer.
 - **Frame reader** for the slideshow: start at a position, stop on a frame (README §2 Slideshow, `SlideGif`).
-- LZW decoding may use the `gif` crate's decoder, but compositing (disposal methods, transparency, "restore previous") must match Pillow exactly. The existing Pillow comparisons (`MV_GIF_REF`, `MV_GIF_DUMP`, see README §4) become Rust tests against the same reference files.
+- LZW decoding is ported from `GifCodec` as it is (decided in M0), not taken from the `gif` crate: the Kotlin decoder is the one that matched Pillow on broken real files, and its handling of bad codes and truncated data is part of that. Compositing (disposal methods, transparency, "restore previous") must match Pillow exactly. The Pillow comparisons are `core/tests/gif_reference.rs` (`MV_GIF_REF`, `MV_GIF_DUMP`, `MV_GIF_BENCH`) with `linux/tools/gif_ref.py` and `gif_compare.py` (Pillow 9.0.1). Known reference difference: for disposal 2 without transparency, Pillow 9.0.1 fills with the opaque background colour, the codec clears to transparent; `gif_compare.py` reports it separately.
+- `SlideGif`'s playback loop (start at a position, pause on a frame) is ported with the slideshow in M2; `FrameReader` is in `core` now.
 
 ### 7.4 Videos
 
@@ -794,7 +804,8 @@ On Android only images, GIFs, videos and text have previews; everything else is 
 | Favourites | `state.json` | paths |
 | Slideshow session: folder, current item, random on/off, seed, pinned item, list size + hash, video position | `state.json` | saved on every item change and every second during a video |
 | Window size, maximised, sidebar width; editor window sizes | `state.json` | — |
-| Open tabs (folder, scroll anchor), expanded tree nodes, per-folder view and sort (if enabled) | `state.json` | — |
+| Per-folder sort (by, descending, folders first) and the *Automatic* result (folder has images or not) | `state.json` | keyed by folder path; ≤ 5,000 folders, least recently opened dropped first (§4.3) |
+| Open tabs (folder, scroll anchor), expanded tree nodes, per-folder view and thumbnail size (if enabled) | `state.json` | — |
 | Favourites | `~/.config/gtk-3.0/bookmarks` (shared) or `state.json` (private list) | — |
 | File-operation undo history | memory only | last 20, this session |
 | GIF / video metadata | `meta.db` | key = path + size + mtime, pruned after 90 days; the Android schema |
@@ -821,7 +832,7 @@ Matching schemas and key names mean a later *export / import* could move state b
 
 ## 11. Testing
 
-1. **Unit tests in `core`**, ported case by case from the Kotlin tests: smart crop (the README examples), slideshow timing (the README table), natural sort and folder order, random order (no repeats, restore after restart, adds and deletes), file types and magic sniffing, the GIF codec on synthetic files, playlist parsing, book classification and resume rules, `TextDecode` and `TextFile` (charsets, BOM, CRLF round trips, *Save as UTF-8*, changed-on-disk, names, drafts). The Kotlin tests are the reference: same inputs, same expected outputs.
+1. **Unit tests in `core`**, ported case by case from the Kotlin tests: smart crop (the README examples), slideshow timing (the README table), natural sort and folder order (plus new cases: *Automatic* sort resolution, per-folder sort records), random order (no repeats, restore after restart, adds and deletes), file types and magic sniffing, the GIF codec on synthetic files, playlist parsing, book classification and resume rules, `TextDecode` and `TextFile` (charsets, BOM, CRLF round trips, *Save as UTF-8*, changed-on-disk, names, drafts). The Kotlin tests are the reference: same inputs, same expected outputs.
 2. **GIF reference tests** against Pillow (`MV_GIF_REF`, `MV_GIF_DUMP`), as on Android.
 3. **Real-folder check:** `media-viewer --check DIR [--threads 6] [--large-gif-mb 40]` runs the listing, type detection, every GIF's first frame, block scan and strip, video metadata through the helper, slideshow timing, and a sequential and a random pass with restore checks. Reports go to `target/media-check/` (`summary.txt`, `gif-failures.tsv`, `types.tsv`, `video-failures.tsv`). Unlike Android, stills and video frames *are* covered here.
 4. **UI smoke tests:** a headless GTK run (`GDK_BACKEND=broadway` or `weston --headless` **verify**) that opens a fixture folder, scrolls, opens the slideshow and the editor, and checks that nothing panics and no frame takes over 50 ms.
@@ -834,18 +845,16 @@ Matching schemas and key names mean a later *export / import* could move state b
 ### 12.1 Development setup (Ubuntu 24.04)
 
 ```bash
-# Rust (not installed on the dev machine yet)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# GTK, libadwaita, GtkSourceView, GStreamer, libheif
-sudo apt install build-essential pkg-config \
-  libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev \
-  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-vaapi \
-  libheif-dev libdav1d-dev libpoppler-glib-dev
-
-cargo run -p app -- ~/Pictures
+cd linux
+./install.sh          # rustup (user) + the apt packages below (sudo); skips what is installed
+./build.sh            # release build → target/release/media-viewer
+./build.sh --check    # CI: rustfmt check, clippy -D warnings, all tests, core without GTK
+cargo run -p media-viewer -- ~/Pictures
 ```
+
+`install.sh` runs the rustup installer and `apt-get install build-essential pkg-config curl libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-vaapi libheif-dev libdav1d-dev libpoppler-glib-dev`; `./install.sh --rust` installs only Rust, enough for `core`.
+
+Package names (a package can't be called `core`, which is Rust's built-in library): `media-viewer-core`, `media-viewer-data`, `media-viewer-thumbnailer`, `media-viewer` (the app), in the folders of §3.1.
 
 Versions on Ubuntu 24.04 (checked 2026-10-25): GTK 4.14.5, libadwaita 1.5.0, GtkSourceView 5.12.0, GStreamer 1.24.2 (libav 1.24.1), libheif 1.17.6, SQLite 3.45.1. `gstreamer1.0-gtk4` is **not** packaged, hence the linked-in `gst-plugin-gtk4` crate.
 
@@ -862,10 +871,10 @@ Each milestone ends with `cargo test` green, the real-folder check run, and the 
 | M | Scope | Done when |
 | --- | --- | --- |
 | **0** | Workspace, CI, `core` ports with all unit tests passing (natural order, sorting, smart crop, slide timing, slide order, file types, `TextDecode`, `TextFile`, `Book`, `Playlist`, GIF codec + Pillow tests) | `cargo test` matches every Kotlin test case |
-| **1** | Main window: sidebar with the favourites folder tree (shared with Files' bookmarks), recent, volumes, trash view, header bar, breadcrumbs, streaming grid with icons and still thumbnails (freedesktop cache, in-process decoders), sort, hidden files, size control, desktop selection, live updates, wait indicator, toasts, error log, settings and state, crash handling | Browsing the reference folder feels instant; no UI-thread I/O |
+| **1** | Main window: sidebar with the favourites folder tree (shared with Files' bookmarks), recent, volumes, trash view, header bar, breadcrumbs, streaming grid with icons and still thumbnails (freedesktop cache, in-process decoders), sort (*Automatic*, remembered per folder), scrolling names, hidden files, size control, desktop selection, live updates, wait indicator, toasts, error log, settings and state, crash handling | Browsing the reference folder feels instant; no UI-thread I/O |
 | **2** | GIF and video strips (helper process), scrub, collages, text previews, fast-scroll bubble; slideshow with all timing and order rules, video through GStreamer, the in-window viewer with header bar and properties pane, session resume | The Android slideshow rules all hold on the desktop |
 | **3** | File operations: operations queue, conflict dialog, undo / redo, trash + Undo, copy / move with progress, compress and extract, all *Copy path* forms, paste images / text as files, spring-loaded drag and drop, *Move to…* / *Copy to…*, rename, new file / folder, clipboard with Files, drag out and drop in, *Open with*, long videos externally, Quick look, Properties, Show in Files; the editor window | Everyday file work without opening Files |
-| **4** | Listening: queue, `playbin3` audio only, history, smart rewind, mini player, MPRIS, keep playing after the window closes | A book survives quit and restart at the right position |
+| **4** | Listening: queue, `playbin3` audio only, history, smart rewind, mini player with ⏮ / ⏭ and the playing file selected in its folder, MPRIS, keep playing after the window closes | A book survives quit and restart at the right position |
 | **5** | **Previews for more file types** (§7.8: system thumbnailers, PDF pages with Quick look paging, e-book and comic covers, office, SVG, fonts, audio covers, RAW, archives); tabs, list view, recursive search, batch rename, select by pattern, terminal, wallpaper, JPEG rotation; polish and packaging: shortcuts window, accessibility pass, multiple windows, animated WebP / AVIF strips, strip cache, `.deb`, AppStream, optional Flatpak | Folders of documents look as rich as folders of photos; installable `.deb` on a clean Ubuntu 24.04 |
 
 Later (from todo.md §3–4, after parity): full player page, shuffle and music mode, chapters, lyrics, sleep timer. Also later: browse inside archives, content search, tags and stars, duplicate finder, download of dropped URLs.
@@ -899,11 +908,13 @@ Later (from todo.md §3–4, after parity): full player page, shuffle and music 
 | Kotlin (Android) | Lines | Linux |
 | --- | --- | --- |
 | `NaturalOrder`, `Sorting`, `SmartCrop`, `SlideTiming`, `SlideOrder` | small | Port to `core`, with the same tests |
-| `Book`, `Playlist`, `BookFolder` | ~250 | Port to `core` |
+| `Book`, `Playlist`, `BookFolder` | ~250 | `Book`, `Playlist` ported to `core` (M0; `file://` lines now accepted); `BookFolder` with the player in M4 (`data`: needs the scanner and `HistoryStore`) |
 | `FileTypes` (types, junk names, magic sniffing, `.ts` check) | ~180 | Port to `core`; MIME types from `gio::content_type_guess` as a second opinion |
 | `TextDecode`, `TextFile`, `Drafts` | ~400 | Port to `core` with `encoding_rs` |
 | `GifCodec`, `SlideGif` | ~530 | Port (compositing must match Pillow) |
-| `Blocking` (abandonable calls) | small | Port (§3.2) |
+| `Blocking` (abandonable calls) | small | Ported as `core::abandonable` (§3.2): errors instead of null, cap of 16 abandoned threads per volume |
+| `TextFile` save | — | Ported with two fixes: keeps the file's permissions, writes through symbolic links |
+| `SlideOrder` | — | Ported as it is, including a known issue: when the current file was deleted, sequential order with date or size sort resumes at the wrong item (its place is found from a placeholder with size 0 and mtime 0). Fix with the slideshow session in M2 |
 | `Highlight` (lexers), `EditHistory` (undo) | ~1,100 | **Replaced** by GtkSourceView |
 | `Thumbnails`, `TextPreview` | ~600 | Rewrite (scheduler logic ported, decoders native) |
 | `FolderScanner`, `FolderListing` | ~270 | Rewrite on `std::fs` + `gio::FileMonitor`, same streaming and sorted-insert design |
