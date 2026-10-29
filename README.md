@@ -47,7 +47,7 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Image tiles with smart crop (crop if ≤ 10 % is lost, else fit)                                                                                        | ✅                           |
 | GIF and video tiles: 5 frames (10–90 %), scrub by hover or swipe, auto-preview on rest or focus, duration / `GIF` badge                               | ✅                           |
 | Large-GIF guard: first frame only until the tile is hovered or swiped                                                                                 | ✅                           |
-| Animated WebP / AVIF strips in tiles                                                                                                                  | ❌ first frame only (see §6) |
+| Animated WebP strips in tiles (own container reader, frames composited like GIFs); AVIF / APNG: first frame                                           | ✅ WebP (§3.4), AVIF ❌ (§6)  |
 | Icons for other files (text, code, document, PDF, audio, archive, APK, unknown), partial downloads and broken files                                   | ✅                           |
 | Text previews: first lines of text, code, subtitles and extensionless text files; UTF-8/16 and Cyrillic code pages                                    | ✅                           |
 | Junk names: double extensions (`a.mp4.gif`), junk extensions (`a.webm'`, `a.php?id=1`), magic-byte sniffing                                           | ✅                           |
@@ -66,7 +66,7 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Full player screen, speed, sleep timer, shuffle, chapters, lyrics                                                                                     | ❌ planned (todo.md §3–4)    |
 | Desktop clicks (auto in DeX and on Chromebooks): click focuses, double-click opens, right-click opens a context menu, `Ctrl` / `Shift` + click select | ✅                           |
 | Drag files out to other apps; `Ctrl` + C copies files to the clipboard; Delete deletes                                                                | ✅                           |
-| Drop files or folders into the app                                                                                                                    | ❌                           |
+| Drop files or folders from other apps into the open folder (copied)                                                                                   | ✅ (§2 Desktops)             |
 
 ### Text editor
 
@@ -78,8 +78,9 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Safe save (temporary file, then rename); notices files changed by other apps                                                        | ✅     |
 | Undo / redo, unsaved-changes question, unsaved text kept if the app is killed                                                       | ✅     |
 | Text size (slider, pinch, `Ctrl` + wheel, `Ctrl` + `+` / `-`) and line wrap, kept between runs                                      | ✅     |
+| Code in JetBrains Mono (bundled, no ligatures; the system font as an option); also in code and log previews on tiles                | ✅     |
 | Files of 1–10 MB open read-only; larger ones open with other apps                                                                   | ✅     |
-| Find, rename from the editor                                                                                                        | ❌     |
+| Find (`Ctrl` + F) with match case and all matches marked; rename from the editor (tap the name, `F2`)                               | ✅     |
 
 ### Slideshow
 
@@ -203,11 +204,15 @@ The bar shows the name (`•` when changed), the language, the encoding and `CRL
 | Text size               | Pinch, slider (⋮ on phones) | `Ctrl` + `+` / `-`, `Ctrl` + wheel            |
 | Wrap lines on / off     | ⋮                           | —                                             |
 | Save in UTF-8           | ⋮ (for legacy charsets)     | —                                             |
+| Find                    | 🔍                          | `Ctrl` + F; next / previous: `Enter` / `Shift` + `Enter`, `F3` / `Shift` + `F3`; close: Esc |
+| Rename                  | Tap the name, ⋮ → Rename…   | `F2`                                          |
 | Back to the folder      | ←, Back                     | Esc                                           |
 
 - Leaving with unsaved changes asks *Save / Discard / Cancel*. If another app changed the file meanwhile, saving asks *Overwrite / Reload / Cancel*. If a character doesn't exist in the file's charset (an emoji in a Windows-1251 file), saving offers UTF-8.
 - If the app is stopped with unsaved changes, they are kept; the next time the file is opened they come back, with *Discard* in a snackbar.
 - Back returns to the folder, scrolled to the file.
+- **Find** opens a bar under the top bar: the text to find (a selected word is taken as the query), `3 / 17`, *Aa* (match case), ↑ / ↓ and ✕. Every match is marked, the current one stronger; it is selected and scrolled into view. Plain text, case-insensitive by default, up to 10,000 matches. Read-only files scroll to the line.
+- **Rename** keeps the unsaved text, undo history and kept draft; the new extension changes the colours. An existing name is refused, never overwritten.
 
 ### Listening: books, albums and lectures
 
@@ -220,6 +225,8 @@ The **▶ / 🎧 button** in the folder's top bar (or `P`) plays the folder:
 Playback continues in the background with the screen off. The **player** at the bottom of the root and folder screens shows, top to bottom: the book bar (one segment per file, as wide as the file is long, played ones filled; a tap starts that file), the title (without the extension) over the folder, `3 / 24` and where we are in the whole book (`2:13:05 / 9:41:00 · 7:28:10 left`, the time left at the playback speed, `≈` until every file's duration has been read in the background), a seek bar with the elapsed and remaining time (dragging previews the target and seeks on release), then the speed (0.75–2×, kept per book), ⏮ previous file, −30 s, play / pause (a ring while the file loads), +30 s, ⏭ next file and the sleep timer (15 / 30 / 60 min or at the end of this file). ✕ stops while paused. A tap on the title opens the folder playing. ⌄ or a swipe down collapses it to a one-row bar (title, position, −30 s, play / pause, +30 s); ⌃ or a swipe up expands it again; the choice is kept. ⏮ goes to the previous file within the first 3 s of one, later to the start of the current file; ⏭ is disabled on the last file. When the book's folder is open, the playing file's tile carries a *playing* mark, and it takes the focus (scrolled into view) when playback starts from the folder and on every change of file. The lock screen, the notification, Bluetooth and headset buttons control it too, and a headset Play after the app was killed continues the last book.
 
 Order: the folder's `.m3u` / `.m3u8` playlist if there is one (the one named like the folder, otherwise the first), then files it doesn't list; without a playlist, natural file-name order (`2` before `10`), whatever the folder view's sort.
+
+**Folder tiles** of books show where they stand: a pill over the collage with 🎧 (started), an equalizer (playing now) or ✓ (finished), and the longest label that fits the tile — `12/30` on a small tile, `12/30 · 4:05` on a medium one, `File 12 of 30 · 4:05 / 25:10` on a wide one (`Finished · 30 files` when done) — and a progress line along the bottom of the collage. Books last played before this version show only the position until they are played again.
 
 Resume: the current file and position are saved; resuming after a pause goes back 5 s (pause over 1 min) or 20 s (over 1 h). A finished book starts over.
 
@@ -283,6 +290,7 @@ In DeX the app opens full screen; on Chromebooks and in Android desktop windowin
 | Select a range                                                      | `Shift` + click (from the last clicked tile)                                                                        |
 | Context menu: Open, Select, Share, Copy, Move to…, Copy to…, Delete | Right-click; actions apply to the whole selection if the tile is part of it                                         |
 | Hand files to another app (My Files, mail, chat)                    | Press on a tile and drag it out of the window; drags the selection if the tile is selected. Folders are not dragged |
+| Bring files in from another app                                     | Drag them from My Files, a browser or mail onto the folder grid (it gets an outline): they are copied into the open folder, as with *Copy to…*; folders too when the other app allows it |
 | Scrub a preview                                                     | Hover (as with gallery clicks)                                                                                      |
 
 In the slideshow, the wheel steps through items (at most one step per 250 ms, so a trackpad fling doesn't skip a dozen), and a video keeps playing while another window has focus. If the slideshow runs in a window, a one-time hint says to maximise it: an app can't maximise its own window.
@@ -326,8 +334,10 @@ app/src/main/java/com/mediaviewer/
   domain/        FileEntry, NaturalOrder, Sorting, SmartCrop, SlideTimer, SlideOrder, Book + Playlist,
                  Highlight (syntax colours), EditHistory (undo)   (pure Kotlin)
   data/fs/       FileTypes, FolderScanner, FolderListing, Volumes, Trash, FileOps,
-                 TextFile (editor load / save / create), Drafts (unsaved editor text)
+                 TextFile (editor load / save / create / rename), Drafts (unsaved editor text),
+                 DropImport (files dropped from other apps)
   data/thumbs/   Thumbnails (scheduler, LRU, watchdogs), GifCodec (scanner + decoder),
+                 WebpAnim (animated WebP container: scan, frames, key frames),
                  TextDecode (text sniffing, charsets; pure Kotlin), TextPreview (text tiles)
   data/meta/     MetaStore (SQLite metadata cache)
   data/history/  HistoryStore (history.db: listening positions), BookFolder (queue + resume point)
@@ -338,8 +348,9 @@ app/src/main/java/com/mediaviewer/
                  Desktop (DeX / Chromebook detection), MouseBack (mouse back button, right-click guard)
   ui/root/       RootScreen
   ui/browser/    FolderScreen, Tiles, TileInput (gestures), TilePlayback (selected tiles play), BrowserState (selection), FolderPicker,
-                 NewItemDialog (new text file / folder)
-  ui/editor/     EditorScreen, EditorState (text, undo, saving)
+                 NewItemDialog (new text file / folder), TileListen (book status on folder tiles),
+                 FileDrop (drop target)
+  ui/editor/     EditorScreen, EditorState (text, undo, saving, find, rename), EditorFind (find bar, rename dialog)
   ui/slideshow/  SlideshowScreen, SlideshowController, SlideGestures, SlideshowMenu
   ui/settings/   SettingsScreen, ErrorLogScreen
   ui/playback/   MiniPlayer
@@ -363,6 +374,7 @@ build-apk.sh                            build / install script
 
 - **Stills** are decoded straight to tile size. `ImageDecoder` handles HEIC/AVIF/WebP and EXIF rotation, and shows truncated files partially.
 - **Videos:** one block on one thread opens a `MediaMetadataRetriever`, reads duration and size, takes 5 keyframe-accurate scaled frames, and releases it. The first frame is handed to the tile early. Because the retriever is used by a single thread, an abandoned (timed-out) decode never races with `release()`. The actual decoding runs in Android's media server process, so a corrupt file can't crash the app.
+- **Animated WebP** (`WebpAnim`, todo §10.2): `AnimatedImageDrawable` can't seek, so the RIFF container is read directly. A chunk scan reads the canvas size and each `ANMF` frame's rectangle, duration, blend and dispose flags and data offset without decoding (cached in SQLite like GIFs; a still WebP is cached as 1 frame and keeps the image path). The first frame comes from the still decoder at once. For the strip, each needed frame is rewrapped as a standalone WebP (`VP8X` + `ALPH` + `VP8 `, or `VP8L`) for `BitmapFactory` and drawn on one full-size canvas (`SRC_OVER` or `SRC`, then clear on dispose). Decoding starts at the nearest key frame (libwebp's rule), so long animations skip most frames. Checked against libwebp through Pillow: identical composited frames for lossless, lossy and lossy + alpha files. WebP tiles take the GIF/video strip path (scrub, auto-preview, live play when selected, `WEBP` badge).
 - **GIFs** use a pure-Kotlin codec (`GifCodec`). Its output matches Pillow exactly on the reference folder, in frame count, duration and composited pixels.
   - *Block scan:* walks the block structure, skipping LZW data by length. It reads frame count, total duration and size without decoding, in ~3 ms for a 16 MB GIF. Results are cached in SQLite.
   - *Strip pass:* one sequential decode from the start that keeps only the 5 target frames, scaled to tile size, and stops after the last one. These GIFs are diff-encoded (almost every frame is a transparent patch over the previous ones), so frames can't be decoded on their own. One canvas and one "restore previous" backup are the only full-size buffers.
@@ -410,6 +422,7 @@ Each file gets a pseudo-random key, `hash(seed, file name)`. The random order is
 | Desktop detection                                             | `Configuration.semDesktopModeEnabled == SEM_DESKTOP_MODE_ENABLED` (read by reflection) for DeX, `FEATURE_PC` for Chromebooks; read again on every configuration change                                                                                                                                                                           |
 | Windowed slideshow                                            | API 30+: current window bounds ≠ maximum window bounds; below: `isInMultiWindowMode`                                                                                                                                                                                                                                                             |
 | Drag out and clipboard                                        | `View.startDragAndDrop` with `DRAG_FLAG_GLOBAL` and `DRAG_FLAG_GLOBAL_URI_READ` and `FileProvider` URIs; `Ctrl` + C puts the same URIs on the clipboard                                                                                                                                                                                          |
+| Drop in                                                       | `Modifier.dragAndDropTarget` on the folder grid; `requestDragAndDropPermissions` for the content URIs, released after the copy; `DropImport` copies streams (name from `OpenableColumns`, " (1)" on clashes, modification time kept); our own FileProvider URIs map back to paths and go through `FileOps`                                       |
 
 ### 3.10 Text previews
 
@@ -424,7 +437,7 @@ Tiles of text files show their first lines instead of an icon.
   3. Strict UTF-8; a character cut off at the end of the 8 KB is fine.
   4. Otherwise legacy 8-bit text, in the first charset found: one the file declares (`<?xml encoding>`, `<meta charset>`, Python / Emacs `coding:`, Vim `fileencoding=`), then a letter-frequency check that tells Windows-1251, KOI8-R and CP866 apart, then the setting *Text files without encoding* (by default Windows-1251 for Cyrillic-script device languages, Windows-1252 otherwise). `android.icu.text.CharsetDetector` is not in the public SDK, so no general detector is used.
 - **Rendering** (`TextPreview`): `StaticLayout` / `Canvas` into an `ALPHA_8` bitmap the size of the tile, on the decode dispatcher under the 5 s watchdog. The tile tints it with the theme's text colour on a paper-like background, so one cached bitmap serves light and dark themes at a quarter of the memory. The extension is shown as a badge.
-  - Font: monospace for code, logs, CSV, JSON and subtitles; proportional (soft-wrapped) for `txt` / `md`, with bold Markdown headings.
+  - Font: monospace for code, logs, CSV, JSON and subtitles (JetBrains Mono, bundled; the system monospace with the setting off); proportional (soft-wrapped) for `txt` / `md`, with bold Markdown headings.
   - Size: 10 sp, growing with the system font size up to 13 sp; 12 sp on TV. Line height 1.2×, 6 dp padding.
   - Whole lines only. The tile size sets the number of lines, never the font size; below 3 lines the icon is shown. Leading blank lines are dropped, tabs expand to 4 columns, control characters are removed.
 
@@ -442,7 +455,7 @@ Tiles of text files show their first lines instead of an icon.
 - **UI:** `BookPlayer` holds one `MediaController` for the Play button and the mini player; the mini player polls the position twice a second only while playing. Controllers send media items without their URI; the session rebuilds it from the media ID, which is the file path.
 - **Folder kind** (`Book.classify`, pure Kotlin): computed on IO once the listing is complete. Lecture folders need every video's duration: from `MetaStore`, or `MediaMetadataRetriever` under the thumbnail watchdog; the first short video ends the check. Folders with more than 300 videos are not checked.
 - **Queue** (`BookFolder.queue`, on IO): playable files (audio + video) of the folder, in playlist order (`Playlist.parse`: comments, relative and absolute paths, `..`, Windows paths matched by file name, URLs skipped; `.m3u` decoded like text previews, `.m3u8` as UTF-8), then unlisted files in natural order.
-- **History** (`HistoryStore`, `history.db`): `audio_folder` (current file, position, speed, finished, last played) and `audio_file` (position, finished). Separate from `MetaStore`, which is a disposable cache; it is never pruned and migrates instead of dropping tables. Saved every 5 s while playing, and at once on pause, file change, seek, task removal and service stop; writes run on IO in the app scope. A file is finished within 2 % or 30 s of its end.
+- **History** (`HistoryStore`, `history.db`, version 2): `audio_folder` (current file, position, speed, finished, last played; since v2 also the file number, queue length and file duration, for the folder tiles — read for all subfolders of a folder view in one prefix-range query) and `audio_file` (position, finished). Separate from `MetaStore`, which is a disposable cache; it is never pruned and migrates instead of dropping tables. Saved every 5 s while playing, and at once on pause, file change, seek, task removal and service stop; writes run on IO in the app scope. A file is finished within 2 % or 30 s of its end.
 - **Smart rewind** (`Book.rewindMs`): 0 s after a pause under 1 min, 5 s under 1 h, 20 s after longer — on resume within the service and when a book is started again.
 - **Resumption:** `MediaSession.Callback.onPlaybackResumption` rebuilds the last book's queue on IO; `MediaButtonReceiver` in the manifest lets a headset Play start it.
 - **Idle:** paused for 30 min, or the book ended → the service stops and the notification goes. Swiping the app away while paused stops it too.
@@ -580,11 +593,11 @@ GIF decode speed on the dev machine (desktop JVM, files from page cache): block 
 ## 6. Limitations and open questions
 
 **Not implemented**
-- **Animated WebP / AVIF strips.** Android offers no way to seek inside these animations (`AnimatedImageDrawable` only plays), so tiles show the first frame. The slideshow animates them, for R seconds, looped.
+- **Animated AVIF strips.** Android offers no way to seek inside these animations (`AnimatedImageDrawable` only plays), so tiles show the first frame; animated WebP has its own reader now (§3.4), AVIF would need the AV1 decoder through `MediaCodec` (docs/RESEARCH_2026-10.md §2). The slideshow animates both, for R seconds, looped.
 - **APNG** is shown as a still everywhere: the platform decoders only read its first frame.
 - **FFmpeg video decoding.** The bundled FFmpeg extension decodes *audio*; its video renderer is still experimental in Media3, so video codecs depend on the device's decoders. Rare AVI video codecs (MJPEG, old DivX on some devices) may not play, and their thumbnails show the broken-file icon. Everything in the reference folder is H.264 + AAC.
 - **MTP devices (§3.14)** are read-only and untested on a device: delete, copy to the device, live updates, streaming without the mirror and folder collages are open (todo §9.8). Android's Files app may hold a device so that this app can't open it (**verify**).
-- **Storage Access Framework fallback**: skipped on purpose. It needs a second file layer and a separate Play Store build flavor, and it isn't needed for direct installs.
+- **Storage Access Framework fallback**: not built. Options (Play declaration as a file manager, a media-only flavor, a full SAF layer) and a recommendation are in docs/RESEARCH_2026-10.md §7; it waits for an owner decision.
 - **Generated Baseline Profile.** The bundled profile is a broad hand-written rule for the app's own code; a profile recorded with Macrobenchmark on a device would be more precise.
 - **Text previews and opening with other apps (§3.10, §3.11)** are untested on a device: the external players' `"position"` extras, the Cyrillic charset check on real files, and the text rendering need a check.
 - **The text editor (§3.13)** is untested on a device: typing speed in a 1 MB file and colouring speed near the 200 K limit on a low-end phone, the on-screen keyboard over the text, pinch next to text selection, `Tab` and `Esc` with DeX keyboards, and the safe save (rename over the file) on SD cards and USB drives (FAT / exFAT through FUSE).
@@ -592,7 +605,7 @@ GIF decode speed on the dev machine (desktop JVM, files from page cache): block 
 - **Lint:** 18 older errors remain (Media3 `@UnstableApi` opt-ins in the slideshow and tile playback, `dispatchKeyEvent` in `MainActivity`); the release build doesn't run lint.
 - **Legacy charsets other than Cyrillic** (Greek, Central European…) are not detected: they use the *Text files without encoding* setting. juniversalchardet (~200 KB) would add detection if needed.
 - **On-device tests.** No emulator or device was available, so the Android-only paths (still and video thumbnails, playback, the UI) are untested on a device. This includes everything in §3.9: the DeX launch size, the right-click guard and the caption-bar inset need a check on a DeX device.
-- **Dropping files into the app** (from My Files in DeX, for example). Dragging out works; a drop target would need to copy or move the dropped content URIs into the open folder.
+- **Dropping into the app** is untested on a device: which apps grant read access to their dropped URIs, and whether a dragged folder arrives as a tree URI that can be listed (otherwise folders are refused with a message). Drops onto a folder tile, moves and `Ctrl` + V paste are open (docs/RESEARCH_2026-10.md §5).
 
 **Decisions taken** (formerly open questions)
 - Mouse, gallery clicks (phones, tablets, TV): a click waits for a possible second click (~300 ms) and then opens; double-click and right-click select. Desktop clicks (auto in DeX and on Chromebooks): click focuses, double-click opens, right-click opens a context menu. Touch: tap opens at once; long press and two-finger tap select.
@@ -600,6 +613,7 @@ GIF decode speed on the dev machine (desktop JVM, files from page cache): block 
 - FFmpeg is in the base APK, so users never have to install anything (+~6 MB for 4 ABIs; release APK ~8.3 MB).
 - No Play Store build for now, so no SAF fallback: the app uses "All files access".
 - Text previews: 10 sp at least, growing with the system font size up to 13 sp; whole lines only; code, logs and tables in monospace (§3.10).
+- Code font: **JetBrains Mono** is bundled (SIL Open Font License 1.1, licence in `assets/licenses/`), in its no-ligature edition (*JetBrains Mono NL*: code reads character by character), regular, bold and italic, subset to Latin, Cyrillic, Greek, punctuation, arrows and box drawing, without hinting: ~250 KB, ~130 KB compressed in the APK. Chosen over Fira Code, Source Code Pro and Cascadia Code for its clear `0/O`, `1/l/I`, tall x-height at small sizes and full Cyrillic; Google's downloadable fonts were not used because they need Play services. *Settings → Editor → JetBrains Mono for code* switches back to the system font. The crash screen keeps the system font (it must work whatever failed).
 - Legacy charsets: a charset the file declares, then the Cyrillic check, then the *Text files without encoding* setting (§3.10).
 - Long videos (default > 3 min) open in an external player when one is installed, otherwise in the slideshow (§3.11).
 - Other apps are opened only from the folder view: never from the slideshow, never in selection mode (§3.11).

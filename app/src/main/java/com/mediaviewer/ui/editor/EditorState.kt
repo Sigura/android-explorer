@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
@@ -17,6 +18,7 @@ import com.mediaviewer.domain.EditHistory
 import com.mediaviewer.domain.Highlight
 import com.mediaviewer.domain.Spans
 import com.mediaviewer.domain.TextChange
+import com.mediaviewer.domain.TextSearch
 import com.mediaviewer.ui.AppViewModel
 import com.mediaviewer.ui.Screen
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +36,9 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
     var doc by mutableStateOf(screen.doc)
         private set
     private val isNew = screen.isNew
-    val language = Highlight.language(screen.doc.name)
+    /** From the file name; follows a rename. */
+    var language by mutableStateOf(Highlight.language(screen.doc.name))
+        private set
 
     var value by mutableStateOf(TextFieldValue(screen.draft ?: screen.doc.text))
         private set
@@ -59,6 +63,94 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
     private var everSaved = false
 
     private var announced = false
+
+    // ------------------------------------------------------------------ find (todo §10.6)
+
+    var findOpen by mutableStateOf(false)
+        private set
+    var query by mutableStateOf("")
+    var matchCase by mutableStateOf(false)
+
+    /** Start offsets of the matches in the current text (computed off the main thread by the screen). */
+    var matches by mutableStateOf(IntArray(0))
+        private set
+
+    /** The match shown, an index into [matches]; -1 = none. */
+    var current by mutableIntStateOf(-1)
+        private set
+
+    /** Bumped on each jump, so the read-only list scrolls even to the same line again. */
+    var jumps by mutableIntStateOf(0)
+        private set
+
+    fun openFind() {
+        if (!findOpen) {
+            // A selection on one line becomes the query, as in most editors.
+            val sel = value.selection
+            val picked = if (sel.collapsed) "" else value.text.substring(sel.min, sel.max)
+            if (picked.isNotEmpty() && '\n' !in picked && picked.length <= 200) query = picked
+        }
+        findOpen = true
+    }
+
+    fun closeFind() {
+        findOpen = false
+        matches = IntArray(0)
+        current = -1
+    }
+
+    /** New matches for the text or query: keeps the place, starting from the caret. */
+    fun setMatches(found: IntArray, forText: String, forQuery: String) {
+        if (forText != value.text || forQuery != query || !findOpen) return
+        matches = found
+        current = TextSearch.nearest(found, value.selection.min)
+        if (current >= 0) show(jump = false)
+    }
+
+    fun findNext(forward: Boolean = true) {
+        if (!findOpen) openFind()
+        current = TextSearch.step(current, matches.size, forward)
+        if (current >= 0) show(jump = true)
+    }
+
+    /** Selects the current match (which scrolls it into view); read-only files scroll their list. */
+    private fun show(jump: Boolean) {
+        val start = matches[current]
+        if (!doc.readOnly) value = value.copy(selection = TextRange(start, start + query.length))
+        if (jump || doc.readOnly) jumps++
+    }
+
+    // ------------------------------------------------------------------ rename (todo §10.6)
+
+    var renaming by mutableStateOf(false)
+
+    /**
+     * Renames the file in place; unsaved text, undo history and the draft stay with it. [onError]
+     * gets the reason when it fails, for the dialog.
+     */
+    fun rename(name: String, onError: (String) -> Unit) {
+        val old = doc
+        val from = File(old.path)
+        val to = File(from.parentFile, name)
+        vm.setBusy("Renaming ${old.name}…", onStop = {}) {
+            val why = abandonable(AppViewModel.TEXT_IO_TIMEOUT_MS) { TextFile.rename(from, name) ?: "" }
+            when {
+                why == null -> onError("Renaming took too long")
+                why.isNotEmpty() -> onError(why)
+                else -> {
+                    doc = old.copy(path = to.path)
+                    language = Highlight.language(name)
+                    spans = Spans.EMPTY
+                    renaming = false
+                    vm.thumbnails.forget(old.path)
+                    vm.editorRenamed(to.path)
+                    // The draft is keyed by path: move it with the file.
+                    vm.viewModelScope.launch(Dispatchers.IO) { vm.drafts.remove(old.path) }
+                    if (dirty) keepDraft()
+                }
+            }
+        }
+    }
 
     /** The draft from an earlier visit was shown: the snackbar offers to discard it. Once only. */
     fun announceDraft() {
@@ -168,6 +260,7 @@ class EditorState(private val vm: AppViewModel, screen: Screen.Editor) {
             if (r is TextFile.Load.Ok) {
                 doc = r.doc
                 revert()
+                closeFind()
             } else {
                 vm.errors.notify("Couldn't read ${doc.name} again", path)
             }

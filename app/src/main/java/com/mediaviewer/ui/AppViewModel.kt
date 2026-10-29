@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
@@ -15,6 +16,7 @@ import com.mediaviewer.MediaViewerApp
 import com.mediaviewer.data.UiMessage
 import com.mediaviewer.data.abandonable
 import com.mediaviewer.data.fs.Drafts
+import com.mediaviewer.data.fs.DropImport
 import com.mediaviewer.data.fs.FileOps
 import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.TextDoc
@@ -22,6 +24,7 @@ import com.mediaviewer.data.fs.TextFile
 import com.mediaviewer.data.fs.Trash
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.fs.Volumes
+import com.mediaviewer.data.history.FolderHistory
 import com.mediaviewer.data.mtp.MtpDevices
 import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.settings.RecentFolder
@@ -41,6 +44,7 @@ import com.mediaviewer.ui.editor.EditorState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -273,6 +277,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (first == null) errors.notify("Nothing to play here", path, log = false) else if (_listing.value?.path == path) _focusTarget.value = first
         }
     }
+
+    /** Books inside [parent] with listening history, by folder path (folder tiles, todo §10.1). */
+    suspend fun booksIn(parent: String): Map<String, FolderHistory> = withContext(Dispatchers.IO) { mv.history.foldersIn(parent) }
 
     /** Called on resume: an external video player may have been installed or removed (README §3.11). */
     fun refreshExternalApps() {
@@ -515,6 +522,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The open file was renamed from the editor: Back focuses it under its new name. */
+    fun editorRenamed(path: String) {
+        val s = _screen.value as? Screen.Editor ?: return
+        _screen.value = s.copy(doc = s.doc.copy(path = path))
+    }
+
     /** Back to the folder, scrolled to and focused on the file. */
     fun closeEditor() {
         val s = _screen.value as? Screen.Editor ?: return
@@ -675,6 +688,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         r.failed.forEach { (p, why) -> errors.readError(p, why) }
                         errors.notify("${r.failed.size} of ${entries.size} couldn't be ${if (move) "moved" else "copied"}: ${r.failed[0].second}", r.failed[0].first)
                     }
+                }
+            }
+            job?.join()
+        }
+    }
+
+    /**
+     * Files or folders dropped on the folder view (todo §10.5): copied into [destDir] with the same
+     * progress, Stop and summary as *Copy to…*. [release] gives up the drag's read permission at the end.
+     */
+    fun importDropped(uris: List<Uri>, destDir: String, release: () -> Unit) {
+        if (uris.isEmpty()) return release()
+        var job: Job? = null
+        setBusy("Copying…", onStop = { job?.cancel() }) {
+            val id = _busy.value?.id ?: 0L
+            job = viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val r = DropImport.copyIn(getApplication(), uris, destDir) { i, n, name ->
+                        viewModelScope.launch { updateBusy(id, "Copying ${i + 1} / $n: $name", i.toFloat() / n) }
+                    }
+                    withContext(Dispatchers.Main) {
+                        val name = destDir.substringAfterLast('/')
+                        when {
+                            r.failed.isEmpty() -> if (r.done > 0) errors.notify("Copied ${r.done} to $name", log = false)
+                            else -> {
+                                r.failed.forEach { (p, why) -> errors.readError(p, why) }
+                                errors.notify("${r.failed.size} of ${uris.size} couldn't be copied: ${r.failed[0].second}", r.failed[0].first)
+                            }
+                        }
+                    }
+                } finally {
+                    withContext(NonCancellable + Dispatchers.Main) { release() }
                 }
             }
             job?.join()

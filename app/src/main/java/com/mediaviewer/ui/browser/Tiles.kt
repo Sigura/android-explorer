@@ -93,6 +93,7 @@ import com.mediaviewer.data.thumbs.Still
 import com.mediaviewer.data.thumbs.Thumb
 import com.mediaviewer.data.thumbs.Thumbnails
 import com.mediaviewer.domain.CropMode
+import com.mediaviewer.domain.ListenStatus
 import com.mediaviewer.domain.SmartCrop
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
@@ -504,14 +505,18 @@ fun EntryTile(
     requestFocus: Boolean,
     /** The mini player is playing this file. */
     playing: Boolean = false,
+    /** A folder that is a book being listened to: where it stands (todo §10.1). */
+    listen: ListenStatus? = null,
     modifier: Modifier = Modifier,
 ) {
     val input = remember(entry.path) { TileInput() }
-    val scrubbable = entry.type == MediaType.FOLDER || entry.type == MediaType.ANIMATED || entry.type == MediaType.VIDEO
+    // A WebP may be animated (todo §10.2): it takes the strip path, which shows a still one as an image.
+    val webp = Thumbnails.mayAnimate(entry)
+    val scrubbable = entry.type == MediaType.FOLDER || entry.type == MediaType.ANIMATED || entry.type == MediaType.VIDEO || webp
     TileFrame(entry, browser, input, scrubbable, requestFocus, modifier, swipeScrub = entry.type != MediaType.FOLDER) {
         when (entry.type) {
-            MediaType.FOLDER -> FolderContent(entry, input, gate)
-            MediaType.IMAGE -> ImageContent(entry, input, gate)
+            MediaType.FOLDER -> FolderContent(entry, input, gate, listen)
+            MediaType.IMAGE -> if (webp) StripContent(entry, input, gate, selected = entry.path in browser.selection) else ImageContent(entry, input, gate)
             MediaType.ANIMATED, MediaType.VIDEO -> StripContent(entry, input, gate, selected = entry.path in browser.selection)
             MediaType.PARTIAL -> OtherContent(entry, Icons.Rounded.Downloading, "incomplete")
             MediaType.OTHER ->
@@ -616,7 +621,7 @@ private fun BoxScope.StripContent(entry: FileEntry, input: TileInput, gate: Scro
     if (!strip.complete && wantFull && strip.gif) {
         CircularProgressIndicator(Modifier.align(Alignment.TopStart).padding(6.dp).size(18.dp), strokeWidth = 2.dp, color = Color.White)
     }
-    if (strip.gif) Badge("GIF") else strip.durationMs?.let { Badge(formatDuration(it)) }
+    if (strip.gif) Badge(strip.badge) else strip.durationMs?.let { Badge(formatDuration(it)) }
     val longMs = LocalTileConfig.current.longVideoMs
     if (!strip.gif && longMs > 0 && (strip.durationMs ?: 0) > longMs) ExternalBadge()
 }
@@ -626,7 +631,7 @@ private fun BoxScope.StripContent(entry: FileEntry, input: TileInput, gate: Scro
  * their own while the grid is idle; hover and `Shift` + arrows still pick a group.
  */
 @Composable
-private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: ScrollGate) {
+private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: ScrollGate, listen: ListenStatus?) {
     val st = rememberThumb(entry, gate)
     val folder = (st as? TileState.Ready)?.thumb as? Thumb.Folder
     val thumbs = LocalThumbnails.current
@@ -672,6 +677,7 @@ private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: Scr
                 )
             }
             Collage(stills)
+            if (listen != null) ListenOverlay(listen)
         }
         TileName(
             entry.name,

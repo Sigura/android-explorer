@@ -2,7 +2,12 @@ package com.mediaviewer.data.thumbs
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.ImageDecoder
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.Log
@@ -41,6 +46,7 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.charset.Charset
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -64,15 +70,17 @@ sealed interface Thumb {
         val srcWidth: Int,
         val srcHeight: Int,
         val durationMs: Long?,
+        /** An animated image (GIF, animated WebP): the tile shows [badge] instead of a duration. */
         val gif: Boolean,
         val complete: Boolean,
+        val badge: String = "GIF",
     ) : Thumb
 
     /**
      * First lines of a text file (README §3.10): glyph coverage only (`ALPHA_8`), tinted by the tile.
      * [textPx] is the font size it was drawn with; a new system font size draws it again.
      */
-    class Text(val image: ImageBitmap, val textPx: Float) : Thumb
+    class Text(val image: ImageBitmap, val textPx: Float, val mono: Typeface?) : Thumb
 
     /** Folder collage (README §4.1): candidates chosen cheap-first, shown 4 at a time. */
     class Folder(
@@ -125,6 +133,9 @@ class Thumbnails(
     @Volatile var textPx: Float = 30f
     @Volatile var textPadPx: Int = 18
 
+    /** Font of monospace text previews (todo §10.9); a new one draws them again. */
+    @Volatile var monoTypeface: Typeface = Typeface.MONOSPACE
+
     /** Text files without a detectable encoding (setting "Text files without encoding"). */
     @Volatile var legacyCharset: Charset = Charsets.ISO_8859_1
 
@@ -151,7 +162,7 @@ class Thumbnails(
      */
     fun usable(entry: FileEntry, width: Int, full: Boolean, firstOnly: Boolean): Thumb? {
         val hit = cached(entry.path, width) ?: return null
-        if (hit is Thumb.Text) return hit.takeIf { it.textPx == textPx }
+        if (hit is Thumb.Text) return hit.takeIf { it.textPx == textPx && (it.mono == null || it.mono === monoTypeface) }
         if (hit !is Thumb.Strip || hit.complete || firstOnly) return hit
         return hit.takeIf { it.gif && entry.size > largeGifBytes && !full }
     }
@@ -207,7 +218,9 @@ class Thumbnails(
                 // Device files: only the thumbnail the device made; folders and other files keep their icon.
                 if (entry.isMedia) remoteStill(entry.path, width, height)?.let { emit(cachePut(entry.path, width, Thumb.Image(it))) }
             } else when (entry.type) {
-                MediaType.IMAGE -> emit(cachePut(entry.path, width, Thumb.Image(still(entry.path, width, height))))
+                MediaType.IMAGE ->
+                    if (mayAnimate(entry)) webp(entry, width, height, full, firstOnly) { emit(it) }
+                    else emit(cachePut(entry.path, width, Thumb.Image(still(entry.path, width, height))))
                 MediaType.ANIMATED -> gif(entry, width, height, full, firstOnly) { emit(it) }
                 MediaType.VIDEO -> video(entry, width, height, firstOnly) { emit(it) }
                 MediaType.FOLDER -> emit(cachePut(entry.path, width, folder(entry.path, width, height)))
@@ -390,6 +403,83 @@ class Thumbnails(
         return out
     }
 
+    // ---------------------------------------------------------------- animated WebP (todo §10.2)
+
+    /** WebP container scan, cached per path + size + mtime; a still WebP is cached as 1 frame. */
+    private suspend fun webpMeta(entry: FileEntry): MediaMeta {
+        meta.get(entry.path, entry.size, entry.mtime)?.let { return it }
+        val info = watchdog(SCAN_MS) { WebpAnim.scan(File(entry.path)) }
+        return (info?.let { MediaMeta(it.width, it.height, it.frames.size, it.durationMs) } ?: MediaMeta(0, 0, 1, 0)).also {
+            meta.put(entry.path, entry.size, entry.mtime, it)
+        }
+    }
+
+    /**
+     * Animated WebP as a strip, like a GIF: the first frame from the still decoder at once, then 5
+     * frames composited by [webpFrames]. A still WebP stays an image.
+     */
+    private suspend fun webp(entry: FileEntry, w: Int, h: Int, full: Boolean, firstOnly: Boolean, emit: suspend (Thumb) -> Unit) {
+        val m = webpMeta(entry)
+        if (m.frameCount <= 1) {
+            emit(cachePut(entry.path, w, Thumb.Image(still(entry.path, w, h))))
+            return
+        }
+        val first = cached(entry.path, w) as? Thumb.Strip ?: run {
+            val s = still(entry.path, w, h)
+            Thumb.Strip(listOf(s.image), m.width, m.height, null, gif = true, complete = false, badge = "WEBP")
+        }
+        emit(first)
+        val large = entry.size > largeGifBytes
+        if (firstOnly || (large && !full)) {
+            cachePut(entry.path, w, first)
+            return
+        }
+        val targets = FRACTIONS.map { (it * m.frameCount).toInt().coerceIn(0, m.frameCount - 1) }.distinct().toIntArray()
+        val limit = if (large) LARGE_GIF_MS else DECODE_MS + entry.size / (1024 * 1024) * 250
+        val frames = watchdog(limit) { webpFrames(File(entry.path), targets, w, h) }
+        emit(cachePut(entry.path, w, Thumb.Strip(frames, m.width, m.height, m.durationMs, gif = true, complete = true, badge = "WEBP")))
+    }
+
+    /**
+     * Composites the [targets] frames on one full-size canvas, starting at key frames
+     * ([WebpAnim.plan]); each frame is rebuilt as a still WebP for the platform decoder.
+     */
+    private fun webpFrames(file: File, targets: IntArray, w: Int, h: Int): List<ImageBitmap> = RandomAccessFile(file, "r").use { raf ->
+        val info = WebpAnim.scan(raf) ?: throw IOException("not an animated WebP")
+        val canvas = Bitmap.createBitmap(info.width, info.height, Bitmap.Config.ARGB_8888)
+        val c = Canvas(canvas)
+        val replace = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+        val clear = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+        val out = ArrayList<ImageBitmap>()
+        var shown: WebpFrame? = null
+        try {
+            for (step in WebpAnim.plan(WebpAnim.keyFrames(info), targets)) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                val fr = info.frames[step.index]
+                val prev = shown
+                if (step.reset) {
+                    canvas.eraseColor(android.graphics.Color.TRANSPARENT)
+                } else if (prev != null && prev.disposeToBackground) {
+                    c.drawRect(prev.x.toFloat(), prev.y.toFloat(), (prev.x + prev.width).toFloat(), (prev.y + prev.height).toFloat(), clear)
+                }
+                val bytes = WebpAnim.standalone(raf, fr)
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw IOException("frame ${step.index} can't be decoded")
+                c.drawBitmap(bmp, fr.x.toFloat(), fr.y.toFloat(), if (fr.blend) null else replace)
+                bmp.recycle()
+                shown = fr
+                if (step.emit) {
+                    val s = coverScale(info.width, info.height, w, h)
+                    val scaled = Bitmap.createScaledBitmap(canvas, max(1, (info.width * s).roundToInt()), max(1, (info.height * s).roundToInt()), true)
+                    out.add((if (scaled === canvas) canvas.copy(Bitmap.Config.ARGB_8888, false) else scaled).asImageBitmap())
+                }
+            }
+        } finally {
+            canvas.recycle()
+        }
+        if (out.isEmpty()) throw IOException("no frames decoded")
+        out
+    }
+
     // ---------------------------------------------------------------- video
 
     /** Also an audio file's duration, for the player's book total (todo §4.3). */
@@ -492,6 +582,7 @@ class Thumbnails(
         if (!(entry.other.hasTextPreview || entry.other == OtherKind.UNKNOWN) || entry.path in notText) return null
         val px = textPx
         val pad = textPadPx
+        val mono = if (FileTypes.monospace(entry.name, entry.other)) monoTypeface else null
         val bitmap = watchdog(DECODE_MS) {
             val text = try {
                 TextDecode.read(File(entry.path), legacyCharset, TextDecode.cyrillicDetector)
@@ -510,11 +601,11 @@ class Thumbnails(
                 height = h,
                 textPx = px,
                 padPx = pad,
-                monospace = FileTypes.monospace(entry.name, entry.other),
+                mono = mono,
                 markdown = ext == "md" || ext == "markdown",
             )
         } ?: return null
-        return Thumb.Text(bitmap.asImageBitmap(), px)
+        return Thumb.Text(bitmap.asImageBitmap(), px, mono)
     }
 
     // ---------------------------------------------------------------- folders
@@ -627,5 +718,8 @@ class Thumbnails(
         /** Watchdogs grow ×2 per timeout of a file, at most ×8 (a 5 s decode gets up to 40 s). */
         const val MAX_SCALE_SHIFT = 3
         val FRACTIONS = floatArrayOf(0.1f, 0.3f, 0.5f, 0.7f, 0.9f)
+
+        /** WebP files may be animated: their tiles take the strip path, which shows a still WebP as an image (todo §10.2). */
+        fun mayAnimate(entry: FileEntry) = entry.type == MediaType.IMAGE && entry.name.endsWith(".webp", ignoreCase = true)
     }
 }

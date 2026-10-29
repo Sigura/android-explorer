@@ -150,6 +150,34 @@ object TextFile {
         e.message ?: "Can't create ${file.name}"
     }
 
+    /**
+     * Renames [from] to [name] in the same folder (todo §10.6); never overwrites. A change of case
+     * only goes through a temporary name, which FAT and exFAT need. Null on success, else the reason.
+     */
+    fun rename(from: File, name: String): String? {
+        val to = File(from.parentFile, name)
+        val caseOnly = to.path != from.path && to.path.equals(from.path, ignoreCase = true)
+        return try {
+            when {
+                to.path == from.path -> null
+                to.exists() && !caseOnly -> "$name already exists"
+                !from.exists() -> "${from.name} is gone"
+                caseOnly -> {
+                    val tmp = File(from.parentFile, ".${from.name}.rename")
+                    when {
+                        !from.renameTo(tmp) -> "Can't rename ${from.name}"
+                        tmp.renameTo(to) -> null
+                        else -> "Can't rename ${from.name}".also { tmp.renameTo(from) }
+                    }
+                }
+                from.renameTo(to) -> null
+                else -> "Can't rename ${from.name}"
+            }
+        } catch (e: SecurityException) {
+            e.message ?: "Can't rename ${from.name}"
+        }
+    }
+
     /** Creates a folder. Null on success, else the reason. */
     fun mkdir(dir: File): String? = when {
         dir.exists() -> "${dir.name} already exists"

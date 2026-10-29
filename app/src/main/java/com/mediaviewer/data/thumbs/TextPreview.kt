@@ -25,9 +25,11 @@ object TextPreview {
     /**
      * @param textPx font size in px (10 sp, scaled with the system font size up to 13 sp; README §3.10).
      * @param padPx padding on each side.
+     * @param mono the font for code, logs and tables (one line per line, never wrapped); null = prose.
      * @return null when fewer than [MIN_LINES] lines fit or there is no text.
      */
-    fun render(text: String, truncated: Boolean, width: Int, height: Int, textPx: Float, padPx: Int, monospace: Boolean, markdown: Boolean): Bitmap? {
+    fun render(text: String, truncated: Boolean, width: Int, height: Int, textPx: Float, padPx: Int, mono: Typeface?, markdown: Boolean): Bitmap? {
+        val monospace = mono != null
         val lineH = textPx * LINE_HEIGHT
         val innerW = width - 2 * padPx
         val innerH = height - 2 * padPx
@@ -38,7 +40,7 @@ object TextPreview {
 
         val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG or TextPaint.SUBPIXEL_TEXT_FLAG).apply {
             textSize = textPx
-            typeface = if (monospace) Typeface.MONOSPACE else Typeface.DEFAULT
+            typeface = mono ?: Typeface.DEFAULT
         }
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
         val canvas = Canvas(bitmap)
