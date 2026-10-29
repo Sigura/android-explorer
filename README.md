@@ -92,6 +92,8 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Code in JetBrains Mono (bundled, no ligatures; the system font as an option); also in code and log previews on tiles                | ✅     |
 | Files of 1–10 MB open read-only; larger ones open with other apps                                                                   | ✅     |
 | Find (`Ctrl` + F) with match case and all matches marked, replace (`Ctrl` + H); rename from the editor (tap the name, `F2`)                               | ✅     |
+| Colour themes: Default (follows the app), One Dark, Solarized, GitHub (light / dark), Monokai, Dracula, High contrast — every colour ≥ 4.5 : 1 | ✅     |
+| Current line, matching brackets and tags; optional line numbers and tab / trailing-space marks                                       | ✅     |
 
 ### Slideshow
 
@@ -219,6 +221,7 @@ The bar shows the name (`•` when changed), the language, the encoding and `CRL
 | Find                    | 🔍                          | `Ctrl` + F; next / previous: `Enter` / `Shift` + `Enter`, `F3` / `Shift` + `F3`; close: Esc |
 | Replace                 | ⌄ in the find bar           | `Ctrl` + H; `Enter` in the replace field replaces and moves on |
 | Rename                  | Tap the name, ⋮ → Rename…   | `F2`                                          |
+| Theme, line numbers, whitespace marks | ⋮ → Theme…, Line numbers, Show tabs and trailing spaces | — |
 | Back to the folder      | ←, Back                     | Esc                                           |
 
 - Leaving with unsaved changes asks *Save / Discard / Cancel*. If another app changed the file meanwhile, saving asks *Overwrite / Reload / Cancel*. If a character doesn't exist in the file's charset (an emoji in a Windows-1251 file), saving offers UTF-8.
@@ -227,6 +230,9 @@ The bar shows the name (`•` when changed), the language, the encoding and `CRL
 - **Find** opens a bar under the top bar: the text to find (a selected word is taken as the query), `3 / 17`, *Aa* (match case), ↑ / ↓ and ✕. Every match is marked, the current one stronger; it is selected and scrolled into view. Plain text, case-insensitive by default, up to 10,000 matches. Read-only files scroll to the line.
 - **Replace** (⌄ in the find bar or `Ctrl` + H, not in read-only files): *Replace* changes the current match and moves to the next; *All* changes every match at once. Each is one undo step; a match is replaced only if the text there still matches.
 - **Rename** keeps the unsaved text, undo history and kept draft; the new extension changes the colours. An existing name is refused, never overwritten.
+- **Themes** (⋮ → *Theme…* or Settings → Editor): a list with a three-line sample in each theme. *Default* is the editor's original look and follows the app's day / night; any other theme stays as chosen. The theme sets the background, text, cursor, selection, current line, find marks and line numbers; the editor bar keeps the app's colours. Text previews on tiles are not themed.
+- **Current line** is tinted. With the cursor next to `(`, `)`, `[`, `]`, `{` or `}` both brackets are marked; in HTML and XML, with the cursor in a tag name, the opening and closing tags too. Brackets in strings and comments don't count; the partner must be within 20,000 characters.
+- **Line numbers** (⋮ or Settings, off by default) show in a gutter, also in read-only files; a wrapped line has one number. **Tabs and trailing spaces** (off by default) are drawn as `→` and `·`.
 
 ### Listening: books, albums and lectures
 
@@ -345,7 +351,7 @@ Other apps are opened only from the folder view: never from the slideshow, and n
 
 Slideshow: interval, transition, invert swipe direction, random order, video muted by default, restore on launch (off / folder only / folder and slideshow).
 Folder view: automatic thumbnail size or a fixed size, image tile mode (smart / crop / fit) and smart-crop threshold (0–30 %), large-GIF threshold, long videos open externally (off / 1–30 min), text files without encoding (auto by device language / a fixed code page), default sort (for folders with images and without their own sort), descending, folders first, show hidden files, mouse clicks (auto / gallery / desktop), always show file names.
-Editor: open text files in the app, text size (10–28 sp), wrap lines.
+Editor: open text files in the app, text size (10–28 sp), wrap lines, JetBrains Mono for code, colour theme, line numbers, tabs and trailing spaces.
 Home screen: number of recent folders shown (1–50).
 Appearance: theme (system / light / dark / AMOLED black).
 Maintenance: clear thumbnail cache, error log, favourite folders.
@@ -531,6 +537,8 @@ Tiles of text files show their first lines instead of an icon.
 - **Screen:** `Screen.Editor` in `AppViewModel`, over the folder's listing (which keeps its live updates). `EditorState` holds the text, undo history, colours and the save logic; the view model keeps it, so unsaved text survives the activity being recreated. Back returns to the folder with the file as the focus target.
 - **Opening** (`TextFile.load`, on IO under a 20 s watchdog, with the wait indicator): over 10 MB → other apps; the first 8 KB are checked for binary data before the whole file is read; then `TextDecode.decodeFull` (the preview rules of §3.10, over the whole file) gives the text, the charset and the BOM. CRLF is detected and turned into `\n` while editing. Over 1 MB, or not writable → read-only, shown line by line in a `LazyColumn`.
 - **Text field:** Compose 1.8's state-based `BasicTextField` can't style text yet, so the editor uses the `TextFieldValue` one with a `VisualTransformation` that adds the colour spans (offsets map 1:1). Its own undo works only from hardware keys, so `EditHistory` (pure Kotlin) keeps edits as diffs (common prefix and suffix) and groups typing or deleting within 1 s; the toolbar and `Ctrl` + Z use it.
+- **Themes** (`EditorTheme`, pure Kotlin): a table of palettes, each with a colour for the 12 roles plus background, text, cursor, selection, current line, find marks, bracket mark and gutter. Classic palettes were kept where they reach WCAG AA (4.5 : 1 against the background) and nudged in lightness, hue kept, where they didn't (Solarized's accents, the Monokai, Dracula and One Dark comments); *Default* lost a step on two light colours (comment `757575` → `717171`, warning `B26A00` → `A86400`). `EditorTest` checks every role and the text of every palette. *Default* draws on the app's own background and text colours (dynamic on Android 12+); setting `editorTheme`, `""` = Default.
+- **Drawing:** the text field sits in an outer vertical scroll (and a horizontal one without wrap), as tall as its text, so the current line, line numbers and whitespace marks are drawn from the field's `TextLayoutResult` in the same coordinates (`drawBehind`, rows on screen only). Since the field no longer scrolls itself, the editor keeps the cursor in view after each selection or text change and when the keyboard resizes the window — this also brings find's selection into view without focus. **Brackets** (`Brackets.match`, pure Kotlin): the bracket after the cursor, then the one before; a scan of ±20,000 characters that jumps over `STRING` / `COMMENT` spans; in markup, the tag name under the cursor matched by name with nesting, self-closing tags skipped. The pair is two background spans in the `VisualTransformation`. Over the colour limit there are no spans, so brackets in strings count there.
 - **Colours** (`Highlight`, pure Kotlin): the language comes from the file name. The C-like, script and config languages share one table-driven lexer (keywords, comments, strings, numbers, annotations, `$variables`, `#` preprocessor lines); markup, JSON, CSS, YAML, INI/TOML, Markdown, subtitles, logs (including logcat), diff and CSV have small lexers of their own. Lexing runs on the Default dispatcher 150 ms after typing stops; in between, each edit moves the existing spans (`Spans.shifted`), so colours stay on their words. Texts over 200 K characters are not coloured.
 - **Saving** (`TextFile.save`, on IO under the watchdog): size and modification time are compared with those at opening (changed → ask). The text is encoded with the file's charset, BOM and line endings, strictly (an unmappable character → ask for UTF-8), written to `.name.tmp` in the same folder, `fsync`ed, and renamed over the file; if the rename fails, the file is written in place. The tile preview is dropped from the cache (`Thumbnails.forget`). `FolderListing` treats a file renamed over an existing one like a finished write, so the entry's size and date are refreshed.
 - **Drafts** (`Drafts`): on `ON_STOP`, unsaved text goes to `files/drafts/` as one JSON file per path; it is removed on save or discard, and offered again when the file is opened.
@@ -599,7 +607,7 @@ The script checks Java, the SDK and the Gradle wrapper first, and prints fix com
 ./gradlew :app:testDebugUnitTest
 ```
 
-The tests cover smart crop (the examples above), slideshow timing (the table above), natural sort and folder order, the random order (no repeats, restore after restart, adds and deletes), file-type detection and the GIF codec on synthetic files. `EditorTest` covers the syntax colouring of every family, span shifting and undo; `TextFileTest` covers charset, BOM and CRLF round trips, *Save as UTF-8*, changed-on-disk detection, names and drafts. `PlayerTest` covers lyrics (LRC, SRT, VTT), companion files and covers, chapters and cue sheets, the shuffle order, speed steps and the sleep fade; `MediaTagsTest` reads chapters and lyrics from MP3, M4B and Matroska files built in memory, including broken ones.
+The tests cover smart crop (the examples above), slideshow timing (the table above), natural sort and folder order, the random order (no repeats, restore after restart, adds and deletes), file-type detection and the GIF codec on synthetic files. `EditorTest` covers the syntax colouring of every family, span shifting, undo and the WCAG contrast of every theme; `BracketsTest` covers nesting, strings and comments, unmatched brackets, the scan bound and markup tags; `TextFileTest` covers charset, BOM and CRLF round trips, *Save as UTF-8*, changed-on-disk detection, names and drafts. `PlayerTest` covers lyrics (LRC, SRT, VTT), companion files and covers, chapters and cue sheets, the shuffle order, speed steps and the sleep fade; `MediaTagsTest` reads chapters and lyrics from MP3, M4B and Matroska files built in memory, including broken ones.
 
 ### Checking a real media folder
 

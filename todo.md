@@ -14,7 +14,11 @@ Priority order: **3 → 4 → 1b** — all three done on 2026-10-29 (§3.0, §3.
 
 **Done (2026-10-29, second step):** the tile ▶, *Continue listening*, *Start over?*, skip lengths, skip silence, repeat, `SYLT` and FLAC / Ogg tags, the battery-saver hint (§3.0).
 
+**Done (2026-10-29, not yet tried on a device):** editor colour themes, current line, matching brackets, line numbers and whitespace marks (§10.8; README §2 *Text editor*, §3.13).
+
 **Done (2026-10-29, third step):** lectures (override, shared position, frame covers), embedded subtitles, CC, seek bubble, file info, Share, moved books (§3.0b).
+
+**Next session** (slideshow Back / Next waits for the item and goes on where it was left, editor wrap by default, drop moves and the root screen, MTP streaming and remembered devices): prompt in [docs/NEXT_SESSION_SLIDESHOW_DROP_MTP.md](docs/NEXT_SESSION_SLIDESHOW_DROP_MTP.md).
 
 **Still open in §3 / §4:** artwork in the notification (§4.6), the external player's position read back (§3.6), detecting that a battery saver stopped playback (§3.3), a TalkBack check (§4.6), and the optional extras of §5.
 
@@ -27,8 +31,8 @@ Contents
 5. [Things easy to forget](#5-things-easy-to-forget)
 6. ~~Text files: create and edit~~ — done, README §3.13
 7. ~~Linux desktop version~~ — dropped from the plan
-8. [Sorting, mini player and long names](#8-sorting-mini-player-and-long-names)
-9. [MTP devices: cameras and phones over USB](#9-mtp-devices-cameras-and-phones-over-usb) — first step done, README §3.14
+8. ~~Sorting, mini player and long names~~ — done, README §1
+9. [MTP devices: cameras and phones over USB](#9-mtp-devices-cameras-and-phones-over-usb) — first and second steps done, README §3.14; open: §9.8
 10. [Listening tiles, animated WebP, video thumbnails, drop, find, SAF](#10-listening-tiles-animated-webp-video-thumbnails-drop-find-saf) — requested 2026-10-29
 
 ---
@@ -41,9 +45,7 @@ Built as planned (README §3.15): PDF, audio covers, EPUB / FB2 / CBZ, ODF and O
 
 ### 1a. Text previews — done (README §3.10)
 
-Still open:
-
-- ~~Folder tiles of folders with no media; CSV columns~~ — done (§1.0).
+Nothing left: folder tiles of folders with no media and CSV columns were done with §1.0.
 
 ### 1b. Other useful formats — PDF, audio, EPUB, FB2, CBZ, ODF, OOXML, APK done (§1.0); SVG, fonts, ZIP listings open
 
@@ -162,7 +164,7 @@ Built as planned (README §2 *Listening*, §3.11, §3.12): the lecture override,
 - **No video in the player** (decided): the player never shows the picture, it only plays the sound. Watching stays in the folder view (tap the video).
 - Videos without an audio track are skipped.
 
-### 3.7 Play button in the folder view — top bar done (README §2, Listening); folder tiles open
+### 3.7 Play button in the folder view — done (top bar: README §2, Listening; folder tile ▶: §3.0)
 
 There is no Play button in the folder view today: a slideshow starts by tapping a tile. Add one (decided):
 
@@ -223,9 +225,9 @@ Still open:
 
 ---
 
-## 8. Sorting, mini player and long names
+## 8. Sorting, mini player and long names — done (README §1 *Browsing*, §2 *Listening*)
 
-Requested 2026-10-25.
+Requested 2026-10-25; built as described below. **Verify on a device:** the mini player's ⏮ / ⏭ at 360 dp, and marquee scrolling smoothness with a full screen of long hash names.
 
 - **Name order for folders without images.** A new default sort, *Automatic*: folders with images or GIFs sort by date, newest first (as now); every other folder (documents, audio, books, lectures, folders of folders) sorts by name in natural order (`a1`, `a2`, `a10`, using `NaturalOrder`). The first listing batch decides; the result is remembered with the folder, so the next visit starts in the right order.
 - **Sort remembered per folder.** The sort menu (name, date modified, size, type; ascending / descending; folders first) applies to the open folder and is saved for it between runs (DataStore, keyed by path, ≤ 5,000 folders, least recently opened dropped first). *Automatic* removes the folder's own choice; *Use for all folders* sets the default. The slideshow follows the folder's sort.
@@ -310,7 +312,7 @@ Requested 2026-10-29. Plan first, then the work; the findings of the research it
 | 10.5 | Drop files and folders into the app (DeX, Chromebooks, split screen) | research + build (files) | **done** for the folder grid (README §2 Desktops, §3.9); open: research doc §5 |
 | 10.6 | Text editor: find, rename from the editor | build | **done** (README §2 Text editor) |
 | 10.7 | Storage Access Framework fallback (for a Play Store build) | research | **done**: options and a recommendation in the research doc §7. **Not planned** (owner, 2026-10-29): no Play Store release is planned; revisit before one (first step: the Play declaration as a file manager, no code) or for devices that can't grant "All files access" (some Android TV boxes) |
-| 10.8 | Text editor: colour themes and richer colouring | build | planned, below; prompt in [docs/NEXT_SESSION_EDITOR.md](docs/NEXT_SESSION_EDITOR.md) |
+| 10.8 | Text editor: colour themes and richer colouring | build | **done** (README §2 Text editor, §3.13) |
 | 10.10 | SVG, APNG, MediaStore first frames, drops onto tiles, paste | build | **done** (below) |
 | 10.9 | Text editor and text previews: the best monospaced font available | build | **done**: JetBrains Mono NL bundled (README §6, *Code font*) |
 
@@ -359,19 +361,11 @@ Built as planned (README §1, §2 *Desktops*, §3.4, §3.9, §3.15): SVG / SVGZ 
 - **Rename:** a tap on the file name in the editor bar (or `F2`) opens a rename dialog with the name selected up to the extension; the same name rules as new files; never overwrites. The unsaved text, undo history and draft follow the new name; the colouring follows the new extension.
 - Replace is not part of this step.
 
-### 10.8 Text editor: colour themes and richer colouring
+### 10.8 Text editor: colour themes and richer colouring — done (2026-10-29)
 
-Requested 2026-10-29, planned. Syntax colours exist today (`Highlight`, 11 lexer families, one light and one dark palette in `EditorScreen.rememberStyles`). The addition:
+Built as planned (README §1, §2 *Text editor*, §3.13): `EditorTheme` with nine themes and a contrast test, the theme dialog in the editor ⋮ and in Settings, current line, matching brackets and tags (`Brackets`, tested in `BracketsTest`), line numbers and whitespace marks behind settings. Changes to the plan: the text field now sits in an outer scroll (it is as tall as its text), so everything is drawn from its layout and the editor keeps the cursor in view itself; read-only files get line numbers and the theme, but no whitespace marks, current line or brackets (no cursor there).
 
-- **Colour themes.** A theme is a named palette for the 12 `Role`s + background, text, selection, current line and find marks (§10.6). Built in: *Default* (today's), *One Dark*, *Solarized* (light / dark), *GitHub* (light / dark), *Monokai*, *Dracula*, *High contrast*. The default follows the app's day / night; a chosen theme is kept (settings, `editorTheme`). The palettes live in one pure-Kotlin table (`EditorTheme`), tested for contrast: each role ≥ 4.5 : 1 against its background (WCAG AA), checked in `EditorTest`.
-- **Where:** editor ⋮ → *Theme…* (a list with a live 3-line sample per theme), and Settings → *Text editor*. Text previews on tiles stay tinted by the tile (README §3.10), not themed.
-- **Richer colouring** in the editor:
-  - **current line** background;
-  - **matching bracket** (`()[]{}`, and tags in markup) highlighted next to the cursor, found by a bounded scan (±20,000 characters) that skips strings and comments using the existing spans;
-  - **whitespace marks** (optional: tabs as `→`, trailing spaces);
-  - **line numbers** in a gutter (optional; read-only files too), in the theme's muted colour.
-- **Limits unchanged:** no colours above 200 K characters (README §3.13); bracket matching and the current line still work there.
-- **Verify:** typing speed with the extra spans in a 1 MB file on a low-end phone; the `TextFieldValue` editor draws the gutter and current line from `onTextLayout` (line tops), so check scrolling smoothness.
+**Verify on a device:** typing speed in a 1 MB file with line numbers on (a line-start pass per edit) and the bracket scan; scrolling smoothness with the gutter and marks drawn per frame; the cursor kept in view while typing at the bottom with the keyboard open, and while selecting by dragging past the edge (the field no longer scrolls itself: Compose's own edge auto-scroll may not reach the outer scroll); the find selection scrolled into view in a long file; selection handles with a chosen theme; the dialog's samples on a 360 dp phone.
 
 ### 10.9 The best monospaced font available
 

@@ -1,5 +1,7 @@
 # Prompt for a session: editor colour themes and richer colouring
 
+**Done (2026-10-29):** built on `master` (branch `claude/nifty-cori-g1qoor`), see todo §10.8 and README §3.13. Kept for the record.
+
 Copy everything below the line into a new session on `Sigura/android-explorer`.
 
 ---
