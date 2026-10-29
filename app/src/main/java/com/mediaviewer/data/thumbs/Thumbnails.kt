@@ -3,19 +3,29 @@ package com.mediaviewer.data.thumbs
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
 import android.graphics.ImageDecoder
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
+import android.content.ContentResolver
+import android.content.ContentUris
+import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.os.SystemClock
 import android.util.Log
 import android.util.LruCache
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import com.caverock.androidsvg.RenderOptions
+import com.caverock.androidsvg.SVG
 import com.mediaviewer.data.ErrorReporter
 import com.mediaviewer.data.fs.FileTypes
 import com.mediaviewer.data.fs.FolderScanner
@@ -23,6 +33,9 @@ import com.mediaviewer.data.fs.TAG
 import com.mediaviewer.data.meta.MediaMeta
 import com.mediaviewer.data.meta.MetaStore
 import com.mediaviewer.data.mtp.MtpPaths
+import com.mediaviewer.data.tags.FileSource
+import com.mediaviewer.domain.Companions
+import com.mediaviewer.domain.CsvPreview
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import com.mediaviewer.domain.model.OtherKind
@@ -83,11 +96,22 @@ sealed interface Thumb {
      */
     class Text(val image: ImageBitmap, val textPx: Float, val mono: Typeface?) : Thumb
 
-    /** Folder collage (README §4.1): candidates chosen cheap-first, shown 4 at a time. */
+    /**
+     * The picture of a document, book, audio file or app (todo §1.0) and a [badge] (pages,
+     * duration, the app's name, the format). [fit]: show it whole (book covers, icons); otherwise
+     * it fills the tile from the top (a PDF page, album art).
+     */
+    class Cover(val still: Still, val badge: String?, val fit: Boolean) : Thumb
+
+    /**
+     * Folder collage (README §4.1): candidates chosen cheap-first, shown 4 at a time. [audioCount]:
+     * audio files directly inside (counted during the same scan), for the tile's ▶ button (todo §3.2).
+     */
     class Folder(
         val candidates: List<FileEntry>,
         val itemCount: Int,
         val groups: ConcurrentHashMap<Int, List<Still>>,
+        val audioCount: Int = 0,
     ) : Thumb {
         val groupCount: Int get() = (candidates.size + 3) / 4
     }
@@ -139,6 +163,12 @@ class Thumbnails(
 
     /** Text files without a detectable encoding (setting "Text files without encoding"). */
     @Volatile var legacyCharset: Charset = Charsets.ISO_8859_1
+
+    /** MediaStore's own video thumbnails (todo §10.10); set by the app. */
+    @Volatile var contentResolver: ContentResolver? = null
+
+    /** APK icons and names (todo §1.0); set by the app. */
+    @Volatile var packageManager: PackageManager? = null
 
     /** The device's own thumbnail of a file on an MTP device (todo §9.4); null when it has none. */
     @Volatile var remote: (suspend (String) -> ByteArray?)? = null
@@ -220,12 +250,12 @@ class Thumbnails(
                 if (entry.isMedia) remoteStill(entry.path, width, height)?.let { emit(cachePut(entry.path, width, Thumb.Image(it))) }
             } else when (entry.type) {
                 MediaType.IMAGE ->
-                    if (mayAnimate(entry)) webp(entry, width, height, full, firstOnly) { emit(it) }
+                    if (mayAnimate(entry)) animatedStill(entry, width, height, full, firstOnly) { emit(it) }
                     else emit(cachePut(entry.path, width, Thumb.Image(still(entry.path, width, height))))
                 MediaType.ANIMATED -> gif(entry, width, height, full, firstOnly) { emit(it) }
                 MediaType.VIDEO -> video(entry, width, height, firstOnly) { emit(it) }
                 MediaType.FOLDER -> emit(cachePut(entry.path, width, folder(entry.path, width, height)))
-                MediaType.OTHER -> text(entry, width, height)?.let { emit(cachePut(entry.path, width, it)) }
+                MediaType.OTHER -> other(entry, width, height)?.let { emit(cachePut(entry.path, width, it)) }
                 else -> return@flow
             }
             timeouts.remove(entry.path)
@@ -407,33 +437,46 @@ class Thumbnails(
     // ---------------------------------------------------------------- animated WebP (todo §10.2)
 
     /** WebP container scan, cached per path + size + mtime; a still WebP is cached as 1 frame. */
-    private suspend fun webpMeta(entry: FileEntry): MediaMeta {
+    /** Frame count and duration of an animated WebP or APNG (1 frame = a still), cached in `meta.db`. */
+    private suspend fun animMeta(entry: FileEntry): MediaMeta {
         meta.get(entry.path, entry.size, entry.mtime)?.let { return it }
-        val info = watchdog(SCAN_MS) { WebpAnim.scan(File(entry.path)) }
-        return (info?.let { MediaMeta(it.width, it.height, it.frames.size, it.durationMs) } ?: MediaMeta(0, 0, 1, 0)).also {
-            meta.put(entry.path, entry.size, entry.mtime, it)
+        val m = watchdog(SCAN_MS) {
+            if (isWebp(entry)) {
+                WebpAnim.scan(File(entry.path))?.let { MediaMeta(it.width, it.height, it.frames.size, it.durationMs) }
+            } else {
+                FileSource(File(entry.path)).use { src ->
+                    val head = ByteArray(minOf(4096L, src.size).toInt())
+                    src.read(0, head)
+                    // Almost every PNG is a still: one small read, nothing written to meta.db.
+                    if (!ApngAnim.looksAnimated(head)) return@watchdog STILL
+                    ApngAnim.scan(src)?.let { MediaMeta(it.width, it.height, it.frames.size, it.durationMs) }
+                }
+            }
         }
+        if (m === STILL) return STILL
+        return (m ?: MediaMeta(0, 0, 1, 0)).also { meta.put(entry.path, entry.size, entry.mtime, it) }
     }
 
     /**
-     * Animated WebP as a strip, like a GIF: the first frame from the still decoder at once, then 5
-     * frames composited by [webpFrames]. A still WebP stays an image.
+     * Animated WebP and APNG as a strip, like a GIF: the first frame from the still decoder at
+     * once, then 5 frames composited by [webpFrames] / [apngFrames]. A still one stays an image.
      */
-    private suspend fun webp(entry: FileEntry, w: Int, h: Int, full: Boolean, firstOnly: Boolean, emit: suspend (Thumb) -> Unit) {
+    private suspend fun animatedStill(entry: FileEntry, w: Int, h: Int, full: Boolean, firstOnly: Boolean, emit: suspend (Thumb) -> Unit) {
+        val badge = if (isWebp(entry)) "WEBP" else "APNG"
         // First visit: the still (frame 1) goes up at once; the container scan comes after it.
         var shown: Still? = null
         if (meta.get(entry.path, entry.size, entry.mtime) == null) {
             shown = still(entry.path, w, h)
             emit(Thumb.Image(shown))
         }
-        val m = webpMeta(entry)
+        val m = animMeta(entry)
         if (m.frameCount <= 1) {
             emit(cachePut(entry.path, w, Thumb.Image(shown ?: still(entry.path, w, h))))
             return
         }
         val first = cached(entry.path, w) as? Thumb.Strip ?: run {
             val s = shown ?: still(entry.path, w, h)
-            Thumb.Strip(listOf(s.image), m.width, m.height, null, gif = true, complete = false, badge = "WEBP")
+            Thumb.Strip(listOf(s.image), m.width, m.height, null, gif = true, complete = false, badge = badge)
         }
         emit(first)
         val large = entry.size > largeGifBytes
@@ -443,8 +486,8 @@ class Thumbnails(
         }
         val targets = FRACTIONS.map { (it * m.frameCount).toInt().coerceIn(0, m.frameCount - 1) }.distinct().toIntArray()
         val limit = if (large) LARGE_GIF_MS else DECODE_MS + entry.size / (1024 * 1024) * 250
-        val frames = watchdog(limit) { webpFrames(File(entry.path), targets, w, h) }
-        emit(cachePut(entry.path, w, Thumb.Strip(frames, m.width, m.height, m.durationMs, gif = true, complete = true, badge = "WEBP")))
+        val frames = watchdog(limit) { if (isWebp(entry)) webpFrames(File(entry.path), targets, w, h) else apngFrames(File(entry.path), targets, w, h) }
+        emit(cachePut(entry.path, w, Thumb.Strip(frames, m.width, m.height, m.durationMs, gif = true, complete = true, badge = badge)))
     }
 
     /**
@@ -487,6 +530,59 @@ class Thumbnails(
         out
     }
 
+    /**
+     * APNG: [ApngAnim.render] decides the order (key frames, blend, dispose); this draws it on one
+     * full-size canvas, each frame decoded from a standalone PNG.
+     */
+    private fun apngFrames(file: File, targets: IntArray, w: Int, h: Int): List<ImageBitmap> = FileSource(file).use { src ->
+        val info = ApngAnim.scan(src) ?: throw IOException("not an APNG")
+        val canvas = Bitmap.createBitmap(info.width, info.height, Bitmap.Config.ARGB_8888)
+        val c = Canvas(canvas)
+        val replace = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+        val clear = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+        val out = ArrayList<ImageBitmap>()
+        var backup: Bitmap? = null
+        try {
+            ApngAnim.render(info, targets, object : FrameOps {
+                override fun reset() = canvas.eraseColor(android.graphics.Color.TRANSPARENT)
+
+                override fun clear(x: Int, y: Int, w: Int, h: Int) =
+                    c.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), clear)
+
+                override fun save() {
+                    backup?.recycle()
+                    backup = canvas.copy(Bitmap.Config.ARGB_8888, false)
+                }
+
+                override fun restore() {
+                    backup?.let { c.drawBitmap(it, 0f, 0f, replace) }
+                }
+
+                override fun draw(index: Int, frame: ApngFrame, replace: Boolean) {
+                    if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                    val bytes = ApngAnim.standalone(src, info, frame)
+                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw IOException("frame $index can't be decoded")
+                    c.drawBitmap(bmp, frame.x.toFloat(), frame.y.toFloat(), if (replace) this@Thumbnails.srcPaint else null)
+                    bmp.recycle()
+                }
+
+                override fun emit(index: Int) {
+                    val s = coverScale(info.width, info.height, w, h)
+                    val scaled = Bitmap.createScaledBitmap(canvas, max(1, (info.width * s).roundToInt()), max(1, (info.height * s).roundToInt()), true)
+                    out.add((if (scaled === canvas) canvas.copy(Bitmap.Config.ARGB_8888, false) else scaled).asImageBitmap())
+                }
+            })
+        } finally {
+            backup?.recycle()
+            canvas.recycle()
+        }
+        if (out.isEmpty()) throw IOException("no frames decoded")
+        out
+    }
+
+    /** Draws a frame's pixels in place of the canvas's (blend source). */
+    private val srcPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+
     // ---------------------------------------------------------------- video
 
     /** Also an audio file's duration, for the player's book total (todo §4.3). */
@@ -519,6 +615,17 @@ class Thumbnails(
      * only user of it. The first frame is handed over early so the tile shows it at once.
      */
     private suspend fun video(entry: FileEntry, w: Int, h: Int, firstOnly: Boolean, emit: suspend (Thumb) -> Unit) {
+        // MediaStore's thumbnail first (usually made by the gallery already): on screen at once.
+        mediaStoreFrame(entry, w, h)?.let { ms ->
+            val known = meta.get(entry.path, entry.size, entry.mtime)
+            val strip = Thumb.Strip(listOf(ms.image), known?.width?.takeIf { it > 0 } ?: ms.srcWidth, known?.height?.takeIf { it > 0 } ?: ms.srcHeight, known?.durationMs, gif = false, complete = false)
+            // Still listing: that frame is all the tile wants for now; no video decoder at all.
+            if (firstOnly) {
+                emit(cachePut(entry.path, w, strip))
+                return
+            }
+            emit(strip)
+        }
         val first = CompletableDeferred<Thumb.Strip>()
         val started = CompletableDeferred<Unit>()
         val job = abandonScope.async {
@@ -604,6 +711,47 @@ class Thumbnails(
         }
     }
 
+    /** Folder → its videos' MediaStore ids by path, one query per folder (todo §10.10). */
+    private val mediaIds = LruCache<String, Map<String, Long>>(32)
+
+    /**
+     * MediaStore's thumbnail of a video (API 29+), or null: files in `.nomedia` folders, on
+     * storage MediaStore doesn't index, not scanned yet, or any error. Its own short watchdog.
+     */
+    private suspend fun mediaStoreFrame(entry: FileEntry, w: Int, h: Int): Still? {
+        if (Build.VERSION.SDK_INT < 29) return null
+        val resolver = contentResolver ?: return null
+        return try {
+            watchdog(MEDIASTORE_MS) {
+                val dir = File(entry.path).parent ?: return@watchdog null
+                val ids = mediaIds.get(dir) ?: videoIds(resolver, dir).also { mediaIds.put(dir, it) }
+                val id = ids[entry.path] ?: return@watchdog null
+                val uri = ContentUris.withAppendedId(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL), id)
+                val bmp = resolver.loadThumbnail(uri, android.util.Size(max(1, w), max(1, h)), null)
+                Still(bmp.asImageBitmap(), bmp.width, bmp.height)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // DecodeTimeout too: the decoder still gets its turn.
+            null
+        }
+    }
+
+    /** The videos directly in [dir] that MediaStore knows, by path. */
+    @androidx.annotation.RequiresApi(29)
+    private fun videoIds(resolver: ContentResolver, dir: String): Map<String, Long> {
+        val uri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        @Suppress("DEPRECATION") // `_data` is readable again from Android 11 and still answers on 10.
+        val data = MediaStore.MediaColumns.DATA
+        val prefix = dir.trimEnd('/') + "/"
+        val out = HashMap<String, Long>()
+        resolver.query(uri, arrayOf(MediaStore.MediaColumns._ID, data), "$data LIKE ? AND $data NOT LIKE ?", arrayOf("$prefix%", "$prefix%/%"), null)?.use { c ->
+            while (c.moveToNext()) c.getString(1)?.let { out[it] = c.getLong(0) }
+        }
+        return out
+    }
+
     // ---------------------------------------------------------------- text (README §3.10)
 
     /** Text files, code and extensionless files that turn out to be text; null = keep the icon. */
@@ -624,7 +772,7 @@ class Thumbnails(
             }
             val ext = FileTypes.extension(entry.name)
             TextPreview.render(
-                text,
+                if (ext == "csv" || ext == "tsv") CsvPreview.align(text) else text,
                 truncated = entry.size > TextDecode.READ_BYTES,
                 width = w,
                 height = h,
@@ -637,11 +785,154 @@ class Thumbnails(
         return Thumb.Text(bitmap.asImageBitmap(), px, mono)
     }
 
+    // ---------------------------------------------------------------- documents, books, audio, apps (todo §1.0)
+
+    /** Other files: a cover or page for documents, books, audio and apps; the first lines of text; null = the icon. */
+    private suspend fun other(entry: FileEntry, w: Int, h: Int): Thumb? = when (entry.other) {
+        OtherKind.PDF -> pdf(entry.path, w, h)
+        OtherKind.AUDIO -> audioCover(entry.path, w, h)
+        OtherKind.BOOK, OtherKind.DOCUMENT -> docCover(entry, w, h)
+        OtherKind.APK -> apk(entry.path, w, h)
+        OtherKind.VECTOR -> svg(entry, w, h)
+        else -> text(entry, w, h)
+    }
+
+    /** PDF: page 1 on white, filling the tile's width from the top; the page count as the badge. */
+    private suspend fun pdf(path: String, w: Int, h: Int): Thumb.Cover = watchdog(DECODE_MS) {
+        ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+            PdfRenderer(fd).use { r ->
+                if (r.pageCount == 0) throw IllegalStateException("no pages")
+                r.openPage(0).use { page ->
+                    val scale = w.toFloat() / page.width
+                    val bw = max(1, w)
+                    val bh = max(1, min(h, (page.height * scale).roundToInt()))
+                    val bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+                    bmp.eraseColor(Color.WHITE)
+                    page.render(bmp, null, android.graphics.Matrix().apply { setScale(scale, scale) }, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    Thumb.Cover(Still(bmp.asImageBitmap(), page.width, page.height), "${r.pageCount} p.", fit = false)
+                }
+            }
+        }
+    }
+
+    /** Folder → its cover image's name ("" = none), so a folder of 500 songs is listed once. */
+    private val folderCovers = LruCache<String, String>(64)
+
+    /** Audio: the picture inside the file, else the folder's cover image; the duration as the badge. Null = the icon. */
+    private suspend fun audioCover(path: String, w: Int, h: Int): Thumb.Cover? = watchdog(DECODE_MS) {
+        val r = MediaMetadataRetriever()
+        val (art, durationMs) = try {
+            r.setDataSource(path)
+            r.embeddedPicture to (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L)
+        } finally {
+            r.release()
+        }
+        val still = art?.let { decodeBytes(it, w, h) } ?: run {
+            val dir = File(path).parent ?: return@run null
+            val name = folderCovers.get(dir) ?: (Companions.coverFor(File(dir).list()?.toList().orEmpty()) ?: "").also { folderCovers.put(dir, it) }
+            if (name.isEmpty()) null else decodeStill(File(dir, name).path, w, h)
+        } ?: return@watchdog null
+        Thumb.Cover(still, durationMs.takeIf { it > 0 }?.let(::durationLabel), fit = false)
+    }
+
+    /**
+     * EPUB, CBZ, FB2, ODF and OOXML: the cover or the thumbnail the app saved inside; a DOCX
+     * without one shows its text. The format as the badge.
+     */
+    private suspend fun docCover(entry: FileEntry, w: Int, h: Int): Thumb? {
+        val name = entry.name.lowercase()
+        val badge = if (name.endsWith(".fb2.zip")) "FB2" else FileTypes.extension(entry.name)?.uppercase()
+        if (name.endsWith(".fb2")) {
+            val still = watchdog(DECODE_MS) {
+                if (entry.size > ZipIndex.MAX_ENTRY) return@watchdog null
+                DocCovers.fb2Cover(File(entry.path).readBytes())?.let { decodeBytes(it, w, h) }
+            } ?: return null
+            return Thumb.Cover(still, badge, fit = true)
+        }
+        if (!(name.endsWith(".epub") || name.endsWith(".cbz") || name.endsWith(".fb2.zip") || FileTypes.extension(name) in OFFICE_ZIPS)) return null
+        var docxText: String? = null
+        val still = watchdog(DECODE_MS) {
+            FileSource(File(entry.path)).use { src ->
+                val zip = ZipIndex.open(src) ?: return@watchdog null
+                val bytes = if (name.endsWith(".fb2.zip")) {
+                    zip.entries.firstOrNull { it.name.endsWith(".fb2", ignoreCase = true) }?.let { zip.read(it) }?.let(DocCovers::fb2Cover)
+                } else {
+                    DocCovers.coverEntry(entry.name, zip)?.let { zip.find(it) }?.let { zip.read(it) }
+                }
+                if (bytes == null && name.endsWith(".docx")) docxText = zip.readText("word/document.xml")?.let { DocCovers.docxText(it) }
+                bytes?.let { decodeBytes(it, w, h) }
+            }
+        }
+        if (still != null) return Thumb.Cover(still, badge, fit = true)
+        val text = docxText?.takeIf { it.isNotBlank() } ?: return null
+        val px = textPx
+        val bitmap = watchdog(DECODE_MS) { TextPreview.render(text, truncated = true, width = w, height = h, textPx = px, padPx = textPadPx, mono = null, markdown = false) } ?: return null
+        return Thumb.Text(bitmap.asImageBitmap(), px, null)
+    }
+
+    /** APK: the app's icon on the tile, its name as the badge. */
+    private suspend fun apk(path: String, w: Int, h: Int): Thumb.Cover? {
+        val pm = packageManager ?: return null
+        return watchdog(DECODE_MS) {
+            val info = pm.getPackageArchiveInfo(path, 0)?.applicationInfo ?: return@watchdog null
+            // The archive isn't installed: point the resources at it so the icon and label load.
+            info.sourceDir = path
+            info.publicSourceDir = path
+            val icon = info.loadIcon(pm)
+            val size = max(1, min(w, h) / 2)
+            val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            icon.setBounds(0, 0, size, size)
+            icon.draw(Canvas(bmp))
+            Thumb.Cover(Still(bmp.asImageBitmap(), size, size), info.loadLabel(pm).toString(), fit = true)
+        }
+    }
+
+    /**
+     * SVG / SVGZ: the drawing scaled into the tile (AndroidSVG, todo §10.10). No external
+     * resources are fetched (no file resolver is set); large files keep the icon.
+     */
+    private suspend fun svg(entry: FileEntry, w: Int, h: Int): Thumb.Cover? = watchdog(DECODE_MS) {
+        val f = File(entry.path)
+        if (f.length() > MAX_SVG_BYTES) return@watchdog null
+        val svg = f.inputStream().buffered().use { raw ->
+            val input = if (entry.name.endsWith(".svgz", ignoreCase = true)) java.util.zip.GZIPInputStream(raw) else raw
+            SVG.getFromInputStream(input)
+        }
+        // The size it asks for, else its view box; without either, a square.
+        val box = svg.documentViewBox
+        val sw = svg.documentWidth.takeIf { it > 0 } ?: box?.width() ?: 512f
+        val sh = svg.documentHeight.takeIf { it > 0 } ?: box?.height() ?: 512f
+        if (box == null) svg.setDocumentViewBox(0f, 0f, sw, sh)
+        val scale = min(w / sw, h / sh)
+        val bw = max(1, (sw * scale).roundToInt())
+        val bh = max(1, (sh * scale).roundToInt())
+        val bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+        svg.renderToCanvas(Canvas(bmp), RenderOptions().viewPort(0f, 0f, bw.toFloat(), bh.toFloat()))
+        Thumb.Cover(Still(bmp.asImageBitmap(), sw.roundToInt(), sh.roundToInt()), "SVG", fit = true)
+    }
+
+    /** A picture from bytes (a cover inside a file), sampled down to about the tile. */
+    private fun decodeBytes(bytes: ByteArray, w: Int, h: Int): Still? {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        if (o.outWidth <= 0) return null
+        val s = coverScale(o.outWidth, o.outHeight, w, h)
+        var sample = 1
+        while (o.outWidth / (sample * 2) >= o.outWidth * s && o.outHeight / (sample * 2) >= o.outHeight * s) sample *= 2
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+        return Still(bmp.asImageBitmap(), o.outWidth, o.outHeight)
+    }
+
+    private fun durationLabel(ms: Long): String {
+        val s = ms / 1000
+        return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+    }
+
     // ---------------------------------------------------------------- folders
 
     private suspend fun folder(path: String, w: Int, h: Int): Thumb.Folder {
-        val (candidates, count) = watchdog(SCAN_MS) { folderCandidates(path) }
-        val t = Thumb.Folder(candidates, count, ConcurrentHashMap())
+        val scan = watchdog(SCAN_MS) { folderCandidates(path) }
+        val t = Thumb.Folder(scan.candidates, scan.count, ConcurrentHashMap(), scan.audio)
         loadFolderGroup(t, 0, w, h)
         return t
     }
@@ -683,16 +974,37 @@ class Thumbnails(
                 r.release()
             }
         }
+        MediaType.OTHER -> otherStill(e, w, h) ?: throw IllegalStateException("no preview")
         else -> still(e.path, w, h)
+    }
+
+    /** A document, book, audio file or text file as a collage picture; text as dark ink on a light page. */
+    private suspend fun otherStill(e: FileEntry, w: Int, h: Int): Still? = when (val t = other(e, w, h)) {
+        is Thumb.Cover -> t.still
+        is Thumb.Text -> watchdog(DECODE_MS) {
+            val alpha = t.image.asAndroidBitmap()
+            val page = Bitmap.createBitmap(alpha.width, alpha.height, Bitmap.Config.ARGB_8888)
+            val c = Canvas(page)
+            c.drawColor(PAPER)
+            // An ALPHA_8 bitmap is drawn in the paint's colour.
+            c.drawBitmap(alpha, 0f, 0f, Paint().apply { color = INK })
+            Still(page.asImageBitmap(), page.width, page.height)
+        }
+        else -> null
     }
 
     /**
      * Cheap-first preview candidates (README §4.1): no decoding, at most 2 levels deep,
      * stops after [MAX_CANDIDATES]. Mid-size stills first, then GIFs, then videos.
      */
-    private fun folderCandidates(path: String): Pair<List<FileEntry>, Int> {
+    private class FolderScan(val candidates: List<FileEntry>, val count: Int, val audio: Int)
+
+    private fun folderCandidates(path: String): FolderScan {
         val found = ArrayList<FileEntry>()
         var count = 0
+        var audio = 0
+        // Folders without media (todo §1a): documents, books, one audio file's cover, text.
+        val secondary = ArrayList<FileEntry>()
         val subdirs = ArrayList<String>()
         // Level 1 is the folder itself, level 2 its subfolders.
         fun visit(dir: String, level: Int) {
@@ -709,6 +1021,10 @@ class Thumbnails(
                             if (level < 2 && File(p.toString()).isDirectory) subdirs.add(p.toString())
                             continue
                         }
+                        if (level == 1 && kind.type == MediaType.OTHER && kind.other == OtherKind.AUDIO) audio++
+                        if (kind.type == MediaType.OTHER && kind.other in SECONDARY && secondary.size < MAX_CANDIDATES) {
+                            secondary.add(FileEntry(p.toString(), name, MediaType.OTHER, 0, 0, kind.other))
+                        }
                         if (kind.type == MediaType.IMAGE || kind.type == MediaType.ANIMATED || kind.type == MediaType.VIDEO) {
                             val size = if (kind.type == MediaType.IMAGE) File(p.toString()).length() else 0L
                             found.add(FileEntry(p.toString(), name, kind.type, size, 0))
@@ -724,6 +1040,12 @@ class Thumbnails(
             if (found.size >= MAX_CANDIDATES) break
             visit(d, 2)
         }
+        if (found.isEmpty()) {
+            // Covers first; one audio file only (an album's files share one picture), text last.
+            val firstAudio = secondary.firstOrNull { it.other == OtherKind.AUDIO }
+            val others = secondary.filter { it.other != OtherKind.AUDIO }.sortedBy { SECONDARY.indexOf(it.other) }
+            return FolderScan(listOfNotNull(firstAudio) + others, count, audio)
+        }
         val ranked = found.sortedBy { e ->
             when (e.type) {
                 MediaType.IMAGE -> if (e.size in 50_000..3_000_000) 0 else 1
@@ -731,10 +1053,25 @@ class Thumbnails(
                 else -> 3
             }
         }
-        return ranked to count
+        return FolderScan(ranked, count, audio)
     }
 
     companion object {
+        /** Previews for folders without media, in collage order (audio: one file). */
+        private val SECONDARY = listOf(OtherKind.BOOK, OtherKind.PDF, OtherKind.VECTOR, OtherKind.DOCUMENT, OtherKind.AUDIO, OtherKind.TEXT, OtherKind.CODE)
+        private const val PAPER = 0xFFF6F2E9.toInt()
+        private const val INK = 0xFF2B2B2B.toInt()
+
+        /** MediaStore answers fast or not at all (an uncached thumbnail is made synchronously). */
+        private const val MEDIASTORE_MS = 1_500L
+
+        /** A still PNG's answer, never cached. */
+        private val STILL = MediaMeta(0, 0, 1, 0)
+
+        /** Office formats that are ZIPs with a thumbnail inside. */
+        private val OFFICE_ZIPS = setOf("docx", "xlsx", "pptx", "odt", "ods", "odp", "odg")
+        /** SVGs larger than this are maps or exports, slow to draw: they keep the icon. */
+        private const val MAX_SVG_BYTES = 8L * 1024 * 1024
         const val MIN_CACHE = 100
         /** A thumbnail up to 25 % smaller than its tile is still sharp enough. */
         const val UPSCALE_SLACK = 1.25f
@@ -752,6 +1089,9 @@ class Thumbnails(
         const val SLOW_FIRST_FRAME_MS = 800L
 
         /** WebP files may be animated: their tiles take the strip path, which shows a still WebP as an image (todo §10.2). */
-        fun mayAnimate(entry: FileEntry) = entry.type == MediaType.IMAGE && entry.name.endsWith(".webp", ignoreCase = true)
+        /** WebP and PNG files may be animated (todo §10.2, §10.10): the tile takes the strip path and finds out. */
+        fun mayAnimate(entry: FileEntry) = entry.type == MediaType.IMAGE && FileTypes.extension(entry.name).let { it == "webp" || it == "png" || it == "apng" }
+
+        private fun isWebp(entry: FileEntry) = entry.name.endsWith(".webp", ignoreCase = true)
     }
 }

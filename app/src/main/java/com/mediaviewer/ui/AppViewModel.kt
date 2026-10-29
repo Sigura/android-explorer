@@ -24,12 +24,17 @@ import com.mediaviewer.data.fs.TextFile
 import com.mediaviewer.data.fs.Trash
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.fs.Volumes
+import com.mediaviewer.data.history.FileHistory
 import com.mediaviewer.data.history.FolderHistory
+import com.mediaviewer.data.history.LECTURE_AUTO
+import com.mediaviewer.data.history.LECTURE_NO
+import com.mediaviewer.data.history.LECTURE_YES
 import com.mediaviewer.data.mtp.MtpDevices
 import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.settings.RecentFolder
 import com.mediaviewer.data.settings.RestoreMode
 import com.mediaviewer.data.settings.SlideshowSession
+import com.mediaviewer.data.tags.TrackExtrasLoader
 import com.mediaviewer.data.thumbs.TextDecode
 import com.mediaviewer.domain.FolderSort
 import com.mediaviewer.domain.SortBy
@@ -71,7 +76,14 @@ sealed interface Screen {
     data class Editor(val folder: String, val doc: TextDoc, val isNew: Boolean, val draft: String? = null) : Screen
 }
 
-enum class Overlay { SETTINGS, ERROR_LOG }
+/** Screens over the current one: Back closes them and returns where it was. PLAYER = the player screen (todo §4.1). */
+enum class Overlay { SETTINGS, ERROR_LOG, PLAYER }
+
+/** Play was pressed on the finished book in [folder] (todo §3.4). */
+data class StartOver(val folder: String, val showPlayer: Boolean)
+
+/** Makers whose battery savers are known to stop background playback (dontkillmyapp.com). */
+private val AGGRESSIVE_BATTERY_SAVERS = setOf("samsung", "xiaomi", "huawei", "honor", "oppo", "vivo", "oneplus", "realme", "meizu", "asus")
 
 /** A user-started operation that may be slow (README §2.1): shown after ~300 ms with Stop. */
 data class Busy(
@@ -114,6 +126,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _volumes = MutableStateFlow<List<Volume>>(emptyList())
     val volumes: StateFlow<List<Volume>> = _volumes.asStateFlow()
+
+    private val _startOver = MutableStateFlow<StartOver?>(null)
+    /** A finished book's Play waits for *Start over?* (todo §3.4). */
+    val startOver: StateFlow<StartOver?> = _startOver.asStateFlow()
 
     /** Item the folder view should scroll to and focus (README §4.7), consumed once. */
     private val _focusTarget = MutableStateFlow<String?>(null)
@@ -242,11 +258,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * Lecture folders need every video's duration: read from MetaStore, or under the thumbnail
      * watchdog on IO. Never on the main thread.
      */
-    suspend fun bookKind(entries: List<FileEntry>): BookKind? = withContext(Dispatchers.IO) {
+    suspend fun bookKind(entries: List<FileEntry>, lecture: Int = LECTURE_AUTO): BookKind? = withContext(Dispatchers.IO) {
         // Device folders (todo §9): no book playback yet, Play starts the slideshow.
         if (entries.any { MtpPaths.isMtp(it.path) }) return@withContext null
         val longMs = settings.value.longVideoMin * 60_000L
         val videos = entries.filter { it.type == MediaType.VIDEO }
+        // The folder's own choice (todo §3.6) decides for folders of videos without audio.
+        if (entries.none(Book::isAudio) && videos.isNotEmpty()) {
+            if (lecture == LECTURE_YES) return@withContext BookKind.LECTURE
+            if (lecture == LECTURE_NO) return@withContext null
+        }
         val durations = HashMap<String, Long>()
         // Durations matter only for a folder of videos alone; very large folders aren't lecture series.
         if (entries.none(Book::isAudio) && videos.size in 2..MAX_LECTURE_VIDEOS) {
@@ -265,18 +286,116 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Book.classify(entries, longMs) { durations[it.path] }
     }
 
-    /** The folder's Play button: the book, or the slideshow from the first media item. */
-    fun playFolder(path: String, entries: List<FileEntry>, kind: BookKind?) {
+    /**
+     * The folder's Play button: the book, or the slideshow from the first media item. [showPlayer]
+     * (a long press, `Shift` + P) opens the player screen as well (todo §4.1).
+     */
+    fun playFolder(path: String, entries: List<FileEntry>, kind: BookKind?, showPlayer: Boolean = false) {
         if (kind == null) {
             entries.firstOrNull { it.isMedia }?.let(::openSlideshow)
             return
         }
+        playBook(path, showPlayer)
+    }
+
+    /**
+     * Plays or continues the book in [path] — the folder bar, a folder tile's ▶ (todo §3.2) and
+     * *Continue listening* (§3.4). A finished book asks *Start over?* first.
+     */
+    fun playBook(path: String, showPlayer: Boolean = false) {
         viewModelScope.launch {
-            val first = bookPlayer.play(path)
-            // The folder view focuses the file playing (README §2, "Listening").
-            if (first == null) errors.notify("Nothing to play here", path, log = false) else if (_listing.value?.path == path) _focusTarget.value = first
+            if (bookPlayer.isFinished(path)) _startOver.value = StartOver(path, showPlayer) else startBook(path, showPlayer)
         }
     }
+
+    /** *Start over?* answered: [yes] plays the book from its first file. */
+    fun answerStartOver(yes: Boolean) {
+        val s = _startOver.value ?: return
+        _startOver.value = null
+        if (yes) viewModelScope.launch { startBook(s.folder, s.showPlayer) }
+    }
+
+    private suspend fun startBook(path: String, showPlayer: Boolean) {
+        val first = bookPlayer.play(path)
+        // The folder view focuses the file playing (README §2, "Listening").
+        if (first == null) {
+            errors.notify("Nothing to play here", path, log = false)
+        } else {
+            if (_listing.value?.path == path) _focusTarget.value = first
+            if (showPlayer) _overlay.value = Overlay.PLAYER
+            batteryHint()
+        }
+    }
+
+    /**
+     * Once (todo §3.3): phones whose battery savers are known to stop background playback get a
+     * hint with a way to the battery optimisation list, unless the app is already exempt.
+     */
+    private fun batteryHint() {
+        if (settings.value.batteryHintShown) return
+        val ctx = getApplication<Application>()
+        val maker = android.os.Build.MANUFACTURER.lowercase()
+        if (maker !in AGGRESSIVE_BATTERY_SAVERS) return
+        val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+        if (pm.isIgnoringBatteryOptimizations(ctx.packageName)) return
+        settingsStore.update { it.copy(batteryHintShown = true) }
+        errors.message(
+            UiMessage(
+                "If playback stops with the screen off, allow the app to run in the background",
+                actionLabel = "Settings",
+                durationMs = 10_000,
+                onAction = {
+                    try {
+                        ctx.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    } catch (e: Exception) {
+                        errors.notify("No battery settings found on this device", log = false)
+                    }
+                },
+            ),
+        )
+    }
+
+    /** A tap on an audio file: its folder plays from that file, and the player screen opens (todo §4.1). */
+    fun playAudio(entry: FileEntry, orElse: () -> Unit) {
+        viewModelScope.launch {
+            if (bookPlayer.playFrom(entry.path)) {
+                _overlay.value = Overlay.PLAYER
+                batteryHint()
+            } else {
+                orElse()
+            }
+        }
+    }
+
+    /** Listening positions of [folder]'s files, for the slideshow (todo §3.6). */
+    suspend fun listenPositions(folder: String): Map<String, FileHistory> = withContext(Dispatchers.IO) { mv.history.files(folder) }
+
+    /** A video's listening position, or 0: the external player starts there (todo §3.6). */
+    suspend fun listenPosition(path: String): Long = withContext(Dispatchers.IO) { mv.history.file(path)?.takeIf { !it.finished }?.positionMs ?: 0L }
+
+    /** The slideshow reached [positionMs] in a video that has a listening position. */
+    fun saveListenPosition(path: String, positionMs: Long, finished: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { mv.history.updateFilePosition(path, positionMs, finished) }
+    }
+
+    /** The folder's lecture override (todo §3.6): [LECTURE_AUTO], [LECTURE_YES] or [LECTURE_NO]. */
+    suspend fun lectureMode(folder: String): Int = withContext(Dispatchers.IO) { mv.history.folder(folder)?.lecture ?: LECTURE_AUTO }
+
+    fun setLectureMode(folder: String, mode: Int) {
+        viewModelScope.launch(Dispatchers.IO) { mv.history.setLecture(folder, mode) }
+    }
+
+    /** *Continue listening* (todo §3.4): the last books played whose folder and file still exist, newest first. */
+    suspend fun continueListening(limit: Int = 5): List<FolderHistory> = withContext(Dispatchers.IO) {
+        mv.history.recentFolders(limit * 3).filter { h -> h.currentPath != null && File(h.currentPath).isFile }.take(limit)
+    }
+
+    /** A book card's cover: the current file's picture or the folder's cover image. */
+    suspend fun bookCover(h: FolderHistory, px: Int): android.graphics.Bitmap? =
+        h.currentPath?.let { withContext(Dispatchers.IO) { TrackExtrasLoader.cover(it, px) } }
 
     /** Books inside [parent] with listening history, by folder path (folder tiles, todo §10.1). */
     suspend fun booksIn(parent: String): Map<String, FolderHistory> = withContext(Dispatchers.IO) { mv.history.foldersIn(parent) }
@@ -685,6 +804,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         copyWithSummary(destDir, uris.size, move = false, quietIfNothing = true, after = release) { progress ->
             DropImport.copyIn(getApplication(), uris, destDir, progress)
         }
+    }
+
+    /**
+     * `Ctrl` + V in the folder view (todo §10.10): files on the clipboard — `content://` and
+     * `file://` URIs, our own `Ctrl` + C included — are copied into [destDir] like a drop.
+     */
+    fun pasteInto(destDir: String) {
+        val cm = getApplication<Application>().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return
+        val clip = cm.primaryClip
+        val uris = clip?.let { c -> (0 until c.itemCount).mapNotNull { c.getItemAt(it).uri } }.orEmpty()
+            .filter { it.scheme == "content" || it.scheme == "file" }
+        if (uris.isEmpty()) {
+            errors.notify("Nothing to paste: copy files first", log = false)
+            return
+        }
+        importDropped(uris, destDir) {}
     }
 
     /**

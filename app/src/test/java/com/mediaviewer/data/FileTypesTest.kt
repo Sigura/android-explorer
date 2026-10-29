@@ -29,4 +29,16 @@ class FileTypesTest {
         }
         assertEquals(OtherKind.AUDIO, FileTypes.detect(noExt).other)
     }
+
+    @Test fun booksAndOfficeDocuments() {
+        for (n in listOf("a.epub", "b.FB2", "c.fb2.zip", "d.cbz", "e.djvu")) {
+            assertEquals(n, com.mediaviewer.domain.model.OtherKind.BOOK, FileTypes.byExtension(n)?.other)
+        }
+        for (n in listOf("a.xlsx", "b.ods", "c.pptx", "d.odp", "e.docx")) {
+            assertEquals(n, com.mediaviewer.domain.model.OtherKind.DOCUMENT, FileTypes.byExtension(n)?.other)
+        }
+        assertEquals("a plain zip stays an archive", com.mediaviewer.domain.model.OtherKind.ARCHIVE, FileTypes.byExtension("photos.zip")?.other)
+        assertEquals(com.mediaviewer.domain.model.OtherKind.VECTOR, FileTypes.byExtension("logo.SVG")?.other)
+        assertEquals(com.mediaviewer.domain.model.OtherKind.VECTOR, FileTypes.byExtension("map.svgz")?.other)
+    }
 }

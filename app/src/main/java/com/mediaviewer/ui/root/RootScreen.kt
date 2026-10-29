@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import com.mediaviewer.data.fs.Volume
+import com.mediaviewer.data.history.FolderHistory
 import com.mediaviewer.data.mtp.MtpDevices
 import com.mediaviewer.data.thumbs.Still
 import com.mediaviewer.data.thumbs.Thumb
@@ -71,6 +73,9 @@ fun RootScreen(vm: AppViewModel) {
     val recent by vm.settingsStore.recent.collectAsState()
     val settings by vm.settings.collectAsState()
     val devices by vm.devices.collectAsState()
+    val now by vm.bookPlayer.state.collectAsState()
+    // Read again when a book starts, stops or changes file, so the row follows what was heard.
+    val books by produceState(emptyList<FolderHistory>(), now?.folder, now?.index, now?.playing) { value = vm.continueListening() }
     LaunchedEffect(Unit) {
         vm.refreshVolumes()
         vm.mtp.refresh()
@@ -109,6 +114,10 @@ fun RootScreen(vm: AppViewModel) {
                     }
                 }
             }
+        }
+        if (books.isNotEmpty()) {
+            item { SectionTitle("Continue listening") }
+            item { ContinueListeningRow(vm, books, now) }
         }
         if (recent.isNotEmpty()) {
             item { SectionTitle("Recent") }

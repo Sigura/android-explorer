@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -29,9 +31,15 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.material.icons.rounded.Forward10
+import androidx.compose.material.icons.rounded.Forward5
 import androidx.compose.material.icons.rounded.Forward30
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.Replay5
 import androidx.compose.material.icons.rounded.Replay30
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -73,8 +81,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mediaviewer.domain.BookTimes
+import com.mediaviewer.domain.PlayerSpeed
+import com.mediaviewer.domain.SleepTimer
 import com.mediaviewer.playback.BookPlayer
 import com.mediaviewer.playback.NowPlaying
+import com.mediaviewer.playback.SleepMode
 import com.mediaviewer.ui.common.TipIconButton
 import com.mediaviewer.ui.common.formatDuration
 import com.mediaviewer.ui.common.middleEllipsis
@@ -99,12 +110,43 @@ val FULL_PLAYER_HEIGHT: Dp = BOOK_BAR + INFO_ROW + SEEK_ROW + CONTROL_ROW + BOTT
 private val SPEEDS = floatArrayOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 private val SLEEP_MINUTES = intArrayOf(15, 30, 60)
 
+/** The skip buttons, as long as the settings say for books or music mode (todo §4.6); icons with a number for 5, 10 and 30 s. */
+@Composable
+internal fun SkipBackButton(now: NowPlaying, player: BookPlayer, modifier: Modifier, iconSize: Dp = 24.dp) {
+    val sec = now.skipMs / 1000
+    val label = "Back $sec seconds"
+    val icon = when (sec) {
+        5L -> Icons.Rounded.Replay5
+        10L -> Icons.Rounded.Replay10
+        30L -> Icons.Rounded.Replay30
+        else -> Icons.Rounded.FastRewind
+    }
+    TipIconButton(label, onClick = { player.skipBack() }, modifier = modifier) {
+        Icon(icon, contentDescription = label, modifier = Modifier.size(iconSize))
+    }
+}
+
+@Composable
+internal fun SkipForwardButton(now: NowPlaying, player: BookPlayer, modifier: Modifier, iconSize: Dp = 24.dp) {
+    val sec = now.skipMs / 1000
+    val label = "Forward $sec seconds"
+    val icon = when (sec) {
+        5L -> Icons.Rounded.Forward5
+        10L -> Icons.Rounded.Forward10
+        30L -> Icons.Rounded.Forward30
+        else -> Icons.Rounded.FastForward
+    }
+    TipIconButton(label, onClick = { player.skipForward() }, modifier = modifier) {
+        Icon(icon, contentDescription = label, modifier = Modifier.size(iconSize))
+    }
+}
+
 /**
  * The player (todo §4.3), at the bottom of the root and folder screens while a book is loaded.
  * Full: the book bar (one segment per file, tap to jump), title, folder and where we are in the
  * book, a seek bar with elapsed and remaining time, then speed, ⏮, −30 s, play / pause, +30 s, ⏭
- * and the sleep timer. [compact] is the old one-row bar. A swipe up or down switches between them;
- * a tap on the title opens the folder playing.
+ * and the sleep timer. [compact] is the old one-row bar. A swipe down collapses it, a swipe up
+ * expands it, and a swipe up on the expanded bar or a tap on the title opens the player screen.
  */
 @Composable
 fun MiniPlayer(
@@ -112,7 +154,7 @@ fun MiniPlayer(
     player: BookPlayer,
     compact: Boolean,
     onCompact: (Boolean) -> Unit,
-    onOpenFolder: () -> Unit,
+    onOpenPlayer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // The position moves on its own while playing; the bar polls it twice a second, only then.
@@ -123,6 +165,8 @@ fun MiniPlayer(
         }
     }
     val setCompact by rememberUpdatedState(onCompact)
+    val openPlayer by rememberUpdatedState(onOpenPlayer)
+    val isCompact by rememberUpdatedState(compact)
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 3.dp,
@@ -133,7 +177,11 @@ fun MiniPlayer(
                 onDragStart = { dy = 0f },
                 onDragEnd = {
                     val t = 24.dp.toPx()
-                    if (dy < -t) setCompact(false) else if (dy > t) setCompact(true)
+                    when {
+                        dy < -t && isCompact -> setCompact(false)
+                        dy < -t -> openPlayer()
+                        dy > t -> setCompact(true)
+                    }
                 },
             ) { change, amount ->
                 change.consume()
@@ -142,13 +190,13 @@ fun MiniPlayer(
         },
     ) {
         Column(Modifier.windowInsetsPadding(WindowInsets.navigationBars)) {
-            if (compact) CompactPlayer(now, player, onCompact, onOpenFolder) else FullPlayer(now, player, onCompact, onOpenFolder)
+            if (compact) CompactPlayer(now, player, onCompact, onOpenPlayer) else FullPlayer(now, player, onCompact, onOpenPlayer)
         }
     }
 }
 
 @Composable
-private fun CompactPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boolean) -> Unit, onOpenFolder: () -> Unit) {
+private fun CompactPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boolean) -> Unit, onOpenPlayer: () -> Unit) {
     val narrow = LocalConfiguration.current.screenWidthDp < 480
     LinearProgressIndicator(
         progress = { trackFraction(now) },
@@ -160,13 +208,13 @@ private fun CompactPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boole
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val time = if (now.durationMs > 0) "${formatDuration(now.positionMs)} / ${formatDuration(now.durationMs)}" else formatDuration(now.positionMs)
-        TitleBlock(now, "${now.index + 1} / ${now.count} · $time", onOpenFolder, Modifier.weight(1f))
+        TitleBlock(now, "${now.index + 1} / ${now.count} · $time", onOpenPlayer, Modifier.weight(1f))
         // Phones: the transport buttons only, so the name keeps some room.
         val b = Modifier.size(if (narrow) 40.dp else 48.dp)
         if (!narrow) PreviousButton(player, b)
-        TipIconButton("Back 30 seconds", onClick = { player.skipBack() }, modifier = b) { Icon(Icons.Rounded.Replay30, contentDescription = "Back 30 seconds") }
+        SkipBackButton(now, player, b)
         PlayPauseButton(now, player, b)
-        TipIconButton("Forward 30 seconds", onClick = { player.skipForward() }, modifier = b) { Icon(Icons.Rounded.Forward30, contentDescription = "Forward 30 seconds") }
+        SkipForwardButton(now, player, b)
         if (!narrow) NextButton(now, player, b)
         if (!now.playing) StopButton(player, b)
         TipIconButton("Expand player", onClick = { onCompact(false) }, modifier = b) { Icon(Icons.Rounded.ExpandLess, contentDescription = "Expand player") }
@@ -174,12 +222,13 @@ private fun CompactPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boole
 }
 
 @Composable
-private fun FullPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boolean) -> Unit, onOpenFolder: () -> Unit) {
+private fun FullPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boolean) -> Unit, onOpenPlayer: () -> Unit) {
     val narrow = LocalConfiguration.current.screenWidthDp < 480
     val times by player.times.collectAsState()
-    BookBar(now, times, onPick = { player.playFile(it) }, Modifier.fillMaxWidth().height(BOOK_BAR))
+    // Music mode has no book bar (todo §3.1); the space stays, so the grid's padding still fits.
+    if (now.music) Spacer(Modifier.height(BOOK_BAR)) else BookBar(now, times, onPick = { player.playFile(it) }, Modifier.fillMaxWidth().height(BOOK_BAR))
     Row(Modifier.height(INFO_ROW).padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        TitleBlock(now, bookLine(now, times), onOpenFolder, Modifier.weight(1f))
+        TitleBlock(now, bookLine(now, times), onOpenPlayer, Modifier.weight(1f))
         if (!now.playing) StopButton(player, Modifier.size(40.dp))
         TipIconButton("Collapse player", onClick = { onCompact(true) }, modifier = Modifier.size(40.dp)) {
             Icon(Icons.Rounded.ExpandMore, contentDescription = "Collapse player")
@@ -191,25 +240,25 @@ private fun FullPlayer(now: NowPlaying, player: BookPlayer, onCompact: (Boolean)
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { SpeedButton(now, player) }
         val b = Modifier.size(if (narrow) 40.dp else 48.dp)
         PreviousButton(player, b)
-        TipIconButton("Back 30 seconds", onClick = { player.skipBack() }, modifier = b) { Icon(Icons.Rounded.Replay30, contentDescription = "Back 30 seconds") }
+        SkipBackButton(now, player, b)
         PlayPauseButton(now, player, b, big = true)
-        TipIconButton("Forward 30 seconds", onClick = { player.skipForward() }, modifier = b) { Icon(Icons.Rounded.Forward30, contentDescription = "Forward 30 seconds") }
+        SkipForwardButton(now, player, b)
         NextButton(now, player, b)
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) { SleepButton(now, player) }
     }
     Spacer(Modifier.height(BOTTOM_PAD))
 }
 
-/** Title (without the extension when it is the file name) over [info]; a tap opens the folder playing. */
+/** Title (without the extension when it is the file name) over [info]; a tap opens the player screen. */
 @Composable
-private fun TitleBlock(now: NowPlaying, info: String, onOpenFolder: () -> Unit, modifier: Modifier) {
+private fun TitleBlock(now: NowPlaying, info: String, onOpenPlayer: () -> Unit, modifier: Modifier) {
     val name = File(now.path).name
     val title = if (now.title == name) File(name).nameWithoutExtension.ifEmpty { name } else now.title
     Column(
         modifier
             .widthIn(min = 0.dp)
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClickLabel = "Show in folder", onClick = onOpenFolder)
+            .clickable(onClickLabel = "Open the player", onClick = onOpenPlayer)
             .pointerHoverIcon(PointerIcon.Hand)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
@@ -236,21 +285,22 @@ private fun TitleBlock(now: NowPlaying, info: String, onOpenFolder: () -> Unit, 
     }
 }
 
-/** `3 / 24 · 2:13:05 / 9:41:00 · 7:28:10 left`; `≈` until every file's duration is known. */
-private fun bookLine(now: NowPlaying, times: BookTimes?): String {
+/** `3 / 24 · 2:13:05 / 9:41:00 · 7:28:10 left`; `≈` until every file's duration is known. Music: the file's time. */
+internal fun bookLine(now: NowPlaying, times: BookTimes?): String {
     val files = "${now.index + 1} / ${now.count}"
+    if (now.music) return if (now.durationMs > 0) "$files · ${formatDuration(now.durationMs)}" else files
     if (now.count < 2 || times == null) return files
     val p = times.progress(now.index, now.positionMs, now.durationMs)
     val about = if (p.exact) "" else "≈"
     return "$files · ${formatDuration(p.elapsedMs)} / $about${formatDuration(p.totalMs)} · $about${formatDuration(p.leftMs(now.speed))} left"
 }
 
-private fun trackFraction(now: NowPlaying): Float =
+internal fun trackFraction(now: NowPlaying): Float =
     if (now.durationMs > 0) (now.positionMs.toFloat() / now.durationMs).coerceIn(0f, 1f) else 0f
 
 /** One segment per file, as wide as it is long; played files filled. A tap starts the file under it. */
 @Composable
-private fun BookBar(now: NowPlaying, times: BookTimes?, onPick: (Int) -> Unit, modifier: Modifier) {
+internal fun BookBar(now: NowPlaying, times: BookTimes?, onPick: (Int) -> Unit, modifier: Modifier) {
     val weights = remember(times, now.index, now.durationMs) { times?.weights(now.index, now.durationMs) ?: List(now.count) { 1f } }
     val fill = MaterialTheme.colorScheme.primary
     val rest = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
@@ -291,10 +341,12 @@ private fun BookBar(now: NowPlaying, times: BookTimes?, onPick: (Int) -> Unit, m
 /**
  * Elapsed time, the seek bar, time left (at the playback speed). Dragging previews the target
  * time and seeks once on release, so the twice-a-second refresh can't pull the thumb back.
+ * [marks] (chapter starts, ms) are drawn as ticks across the track; with [bubble], the target
+ * time shows above the thumb while dragging (the player screen, todo §4.6).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SeekRow(now: NowPlaying, player: BookPlayer, modifier: Modifier) {
+internal fun SeekRow(now: NowPlaying, player: BookPlayer, modifier: Modifier, marks: List<Long> = emptyList(), bubble: Boolean = false) {
     var drag by remember(now.path) { mutableStateOf<Float?>(null) }
     // After release: shown until the player reports the new position.
     var target by remember(now.path) { mutableStateOf<Long?>(null) }
@@ -332,8 +384,41 @@ private fun SeekRow(now: NowPlaying, player: BookPlayer, modifier: Modifier) {
             valueRange = 0f..dur.coerceAtLeast(1).toFloat(),
             enabled = dur > 0,
             interactionSource = interaction,
-            thumb = { SeekThumb(interaction) },
-            track = { SliderDefaults.Track(it, Modifier.height(4.dp), drawStopIndicator = null, thumbTrackGapSize = 0.dp) },
+            thumb = {
+                Box(contentAlignment = Alignment.Center) {
+                    val d = drag
+                    if (bubble && d != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.inverseSurface,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.wrapContentSize(unbounded = true).offset(y = (-32).dp),
+                        ) {
+                            Text(
+                                formatDuration(d.toLong()),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.inverseOnSurface,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                    SeekThumb(interaction)
+                }
+            },
+            track = { state ->
+                Box(contentAlignment = Alignment.Center) {
+                    SliderDefaults.Track(state, Modifier.height(4.dp), drawStopIndicator = null, thumbTrackGapSize = 0.dp)
+                    if (marks.isNotEmpty() && dur > 0) {
+                        val tick = MaterialTheme.colorScheme.surface
+                        Canvas(Modifier.matchParentSize()) {
+                            for (m in marks) {
+                                if (m <= 0 || m >= dur) continue
+                                val x = size.width * m / dur
+                                drawRect(tick, Offset(x - 1.dp.toPx(), 0f), Size(2.dp.toPx(), size.height))
+                            }
+                        }
+                    }
+                }
+            },
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 8.dp)
@@ -360,12 +445,12 @@ private fun SeekThumb(interaction: MutableInteractionSource) {
 }
 
 @Composable
-private fun PreviousButton(player: BookPlayer, modifier: Modifier) =
+internal fun PreviousButton(player: BookPlayer, modifier: Modifier) =
     TipIconButton("Previous file", onClick = { player.previous() }, modifier = modifier) { Icon(Icons.Rounded.SkipPrevious, contentDescription = "Previous file") }
 
 @Composable
-private fun NextButton(now: NowPlaying, player: BookPlayer, modifier: Modifier) =
-    TipIconButton("Next file", onClick = { player.next() }, enabled = now.index < now.count - 1, modifier = modifier) {
+internal fun NextButton(now: NowPlaying, player: BookPlayer, modifier: Modifier, hasNextChapter: Boolean = false) =
+    TipIconButton("Next file", onClick = { player.next() }, enabled = now.index < now.count - 1 || hasNextChapter, modifier = modifier) {
         Icon(Icons.Rounded.SkipNext, contentDescription = "Next file")
     }
 
@@ -376,7 +461,7 @@ private fun StopButton(player: BookPlayer, modifier: Modifier) =
 
 /** Play / pause, with a ring while the file loads or waits for data. */
 @Composable
-private fun PlayPauseButton(now: NowPlaying, player: BookPlayer, modifier: Modifier, big: Boolean = false) {
+internal fun PlayPauseButton(now: NowPlaying, player: BookPlayer, modifier: Modifier, big: Boolean = false) {
     val label = if (now.playing) "Pause" else "Play"
     TipIconButton(label, onClick = { player.togglePlay() }, modifier = modifier) {
         Box(contentAlignment = Alignment.Center) {
@@ -390,7 +475,7 @@ private fun PlayPauseButton(now: NowPlaying, player: BookPlayer, modifier: Modif
     }
 }
 
-private fun speedLabel(s: Float): String = "%.2f".format(s).trimEnd('0').trimEnd('.') + "×"
+private fun speedLabel(s: Float): String = PlayerSpeed.label(s)
 
 /** Playback speed; the book keeps it (saved with the position). */
 @Composable
@@ -416,22 +501,39 @@ private fun SpeedButton(now: NowPlaying, player: BookPlayer) {
     }
 }
 
-/** Sleep timer: pauses after 15 / 30 / 60 min or at the end of this file; the minutes left show beside the moon. */
+/** What the sleep timer waits for, for the button's label and description. */
+internal fun sleepLabel(now: NowPlaying): String {
+    val minutesLeft = if (now.sleepAtMs > 0) ((now.sleepAtMs - System.currentTimeMillis() + 59_999) / 60_000).coerceAtLeast(1) else 0
+    return when {
+        now.sleepFading -> "Sleep: fading out — shake or tap for 5 more minutes"
+        now.sleepMode == SleepMode.END_OF_CHAPTER -> "Sleep at the end of this chapter"
+        now.sleepMode == SleepMode.END_OF_FILE -> "Sleep at the end of this file"
+        now.sleepMode == SleepMode.TIME -> "Sleep in $minutesLeft min"
+        else -> "Sleep timer"
+    }
+}
+
+/**
+ * Sleep timer: pauses after 15 / 30 / 60 min or at the end of this file (the player screen has
+ * every option); the minutes left show beside the moon. While the sound fades, a tap adds 5 min.
+ */
 @Composable
 private fun SleepButton(now: NowPlaying, player: BookPlayer) {
     var open by remember { mutableStateOf(false) }
     val minutesLeft = if (now.sleepAtMs > 0) ((now.sleepAtMs - System.currentTimeMillis() + 59_999) / 60_000).coerceAtLeast(1) else 0
-    val active = now.sleepAtMs > 0 || now.sleepEndOfFile
-    val label = when {
-        now.sleepEndOfFile -> "Sleep at the end of this file"
-        now.sleepAtMs > 0 -> "Sleep in $minutesLeft min"
-        else -> "Sleep timer"
-    }
+    val active = now.sleepMode != SleepMode.OFF
+    val label = sleepLabel(now)
     Box {
-        TextButton(onClick = { open = true }, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).semantics { contentDescription = label }) {
+        TextButton(
+            onClick = { if (now.sleepFading) player.extendSleep() else open = true },
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).semantics { contentDescription = label },
+        ) {
             val tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
             Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
-            if (now.sleepAtMs > 0) Text(" $minutesLeft min", style = MaterialTheme.typography.labelMedium, color = tint)
+            when {
+                now.sleepFading -> Text(" +${SleepTimer.EXTEND_MS / 60_000} min", style = MaterialTheme.typography.labelMedium, color = tint)
+                now.sleepAtMs > 0 -> Text(" $minutesLeft min", style = MaterialTheme.typography.labelMedium, color = tint)
+            }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (active) {

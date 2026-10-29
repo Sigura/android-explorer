@@ -17,10 +17,13 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +55,7 @@ import com.mediaviewer.ui.playback.FULL_PLAYER_HEIGHT
 import com.mediaviewer.ui.playback.LocalMiniPlayerHeight
 import com.mediaviewer.ui.playback.MINI_PLAYER_HEIGHT
 import com.mediaviewer.ui.playback.MiniPlayer
+import com.mediaviewer.ui.playback.PlayerScreen
 import com.mediaviewer.ui.root.RootScreen
 import com.mediaviewer.ui.settings.ErrorLogScreen
 import com.mediaviewer.ui.settings.SettingsScreen
@@ -194,14 +198,25 @@ private fun AppRoot(vm: AppViewModel, onExit: () -> Unit) {
             MiniPlayer(
                 np, vm.bookPlayer, playerCompact,
                 onCompact = { c -> vm.settingsStore.update { it.copy(playerCompact = c) } },
-                onOpenFolder = { vm.openFolder(np.folder, focus = np.path) },
+                onOpenPlayer = { vm.showOverlay(Overlay.PLAYER) },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
         when (overlay) {
             Overlay.SETTINGS -> SettingsScreen(vm)
             Overlay.ERROR_LOG -> ErrorLogScreen(vm)
+            Overlay.PLAYER -> PlayerScreen(vm)
             null -> Unit
+        }
+        val startOver by vm.startOver.collectAsState()
+        startOver?.let { so ->
+            AlertDialog(
+                onDismissRequest = { vm.answerStartOver(false) },
+                title = { Text("Start over?") },
+                text = { Text("You heard ${java.io.File(so.folder).name} to the end.") },
+                confirmButton = { TextButton(onClick = { vm.answerStartOver(true) }) { Text("Start over") } },
+                dismissButton = { TextButton(onClick = { vm.answerStartOver(false) }) { Text("Cancel") } },
+            )
         }
         WaitIndicator(busy, onStop = vm::stopBusy)
         SnackbarHost(

@@ -12,6 +12,10 @@ enum class OtherKind {
     /** Word processor documents (doc, docx, odt, rtf). */
     DOCUMENT,
     PDF,
+    /** E-books and comics (EPUB, FB2, CBZ…): the cover on the tile (todo §1.0). */
+    BOOK,
+    /** SVG drawings: drawn on the tile (todo §10.10), opened with other apps. */
+    VECTOR,
     AUDIO,
     ARCHIVE,
     APK,

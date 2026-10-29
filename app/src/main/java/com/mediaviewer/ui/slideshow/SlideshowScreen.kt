@@ -143,6 +143,8 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             ctl.show(WindowInsetsCompat.Type.systemBars())
             MouseBack.handler = null
+            c.videoPositionMs = player.currentPosition
+            c.onLeave()
             player.release()
         }
     }

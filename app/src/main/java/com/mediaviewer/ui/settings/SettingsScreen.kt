@@ -149,6 +149,17 @@ fun SettingsScreen(vm: AppViewModel) {
             }
         }
 
+        item { Header("Listening") }
+        item {
+            SliderRow("Skip in books", s.skipBookSec, 5..60, "${s.skipBookSec} s", step = 5) { v -> up { it.copy(skipBookSec = v) } }
+        }
+        item {
+            SliderRow("Skip in music (shuffle)", s.skipMusicSec, 5..60, "${s.skipMusicSec} s", step = 5) { v -> up { it.copy(skipMusicSec = v) } }
+        }
+        item {
+            SwitchRow("Skip silence", "Leaves out silent stretches; also in the speed dialog", s.skipSilence) { v -> up { it.copy(skipSilence = v) } }
+        }
+
         item { Header("Home screen") }
         item {
             SliderRow("Recent folders", s.recentCount, 1..SettingsStore.MAX_RECENT, "${s.recentCount}") { v -> up { it.copy(recentCount = v) } }

@@ -41,7 +41,9 @@ object FileTypes {
         listOf("crdownload", "part", "partial", "download").forEach { put(it, PARTIAL) }
         TEXT_EXT.forEach { put(it, other(OtherKind.TEXT)) }
         CODE_EXT.forEach { put(it, other(OtherKind.CODE)) }
-        listOf("doc", "docx", "odt", "rtf").forEach { put(it, other(OtherKind.DOCUMENT)) }
+        listOf("doc", "docx", "odt", "rtf", "xls", "xlsx", "ods", "ppt", "pptx", "odp", "odg").forEach { put(it, other(OtherKind.DOCUMENT)) }
+        listOf("epub", "fb2", "cbz", "cbr", "mobi", "azw3", "djvu").forEach { put(it, other(OtherKind.BOOK)) }
+        listOf("svg", "svgz").forEach { put(it, other(OtherKind.VECTOR)) }
         put("pdf", other(OtherKind.PDF))
         listOf("mp3", "m4a", "m4b", "aac", "flac", "ogg", "oga", "opus", "wav", "wma", "mka", "aiff", "aif", "ape", "wv", "amr", "mpc")
             .forEach { put(it, other(OtherKind.AUDIO)) }
@@ -66,7 +68,8 @@ object FileTypes {
     }
 
     /** Fast path: extension or well-known name only. Null means "sniff the content". */
-    fun byExtension(name: String): Kind? = byName[name.lowercase()] ?: extension(name)?.let { byExt[it] }
+    fun byExtension(name: String): Kind? =
+        byName[name.lowercase()] ?: if (name.endsWith(".fb2.zip", ignoreCase = true)) other(OtherKind.BOOK) else extension(name)?.let { byExt[it] }
 
     fun detect(file: File): Kind {
         val kind = byExtension(file.name) ?: return sniff(file)
@@ -159,6 +162,14 @@ object FileTypes {
         put("ppt", "application/vnd.ms-powerpoint")
         put("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
         put("odt", "application/vnd.oasis.opendocument.text")
+        put("ods", "application/vnd.oasis.opendocument.spreadsheet")
+        put("odp", "application/vnd.oasis.opendocument.presentation")
+        put("cbz", "application/vnd.comicbook+zip")
+        put("cbr", "application/vnd.comicbook-rar")
+        put("mobi", "application/x-mobipocket-ebook")
+        put("djvu", "image/vnd.djvu")
+        put("svg", "image/svg+xml")
+        put("svgz", "image/svg+xml")
         put("epub", "application/epub+zip")
         put("fb2", "application/x-fictionbook+xml")
         put("mp3", "audio/mpeg")

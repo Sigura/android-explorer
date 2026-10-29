@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Android
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Downloading
+import androidx.compose.material.icons.rounded.Gesture
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderZip
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -86,6 +89,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mediaviewer.data.fs.FileTypes
@@ -475,6 +479,8 @@ private fun BoxScope.ExternalBadge() {
 private fun BoxScope.Badge(text: String) {
     Text(
         text,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         color = Color.White,
         fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
@@ -507,24 +513,37 @@ fun EntryTile(
     playing: Boolean = false,
     /** A folder that is a book being listened to: where it stands (todo §10.1). */
     listen: ListenStatus? = null,
+    /** A folder's ▶ (todo §3.2): play or continue it; `true` = open the player screen too. Null = no button. */
+    onPlay: ((Boolean) -> Unit)? = null,
+    /** A folder takes files dropped on it (todo §10.10): the URIs, and `release` for the drag's read permission. */
+    onDropInto: ((uris: List<android.net.Uri>, release: () -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    var dropHover by remember(entry.path) { mutableStateOf(false) }
+    val activity = LocalContext.current as? android.app.Activity
+    val dropInto by rememberUpdatedState(onDropInto)
+    val drop = remember(entry.path) { FileDrop(activity, onHover = { dropHover = it }) { uris, release -> dropInto?.invoke(uris, release) ?: release() } }
+    val dropModifier = if (onDropInto == null) {
+        modifier
+    } else {
+        modifier
+            .dragAndDropTarget(shouldStartDragAndDrop = { FileDrop.accepts(it) }, target = drop)
+            .then(if (dropHover) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)) else Modifier)
+    }
     val input = remember(entry.path) { TileInput() }
     // A WebP may be animated (todo §10.2): it takes the strip path, which shows a still one as an image.
     val webp = Thumbnails.mayAnimate(entry)
     val scrubbable = entry.type == MediaType.FOLDER || entry.type == MediaType.ANIMATED || entry.type == MediaType.VIDEO || webp
-    TileFrame(entry, browser, input, scrubbable, requestFocus, modifier, swipeScrub = entry.type != MediaType.FOLDER) {
+    TileFrame(entry, browser, input, scrubbable, requestFocus, dropModifier, swipeScrub = entry.type != MediaType.FOLDER) {
         when (entry.type) {
-            MediaType.FOLDER -> FolderContent(entry, input, gate, listen)
+            MediaType.FOLDER -> FolderContent(entry, input, gate, listen, onPlay.takeIf { !browser.selectionMode })
             MediaType.IMAGE -> if (webp) StripContent(entry, input, gate, selected = entry.path in browser.selection) else ImageContent(entry, input, gate)
             MediaType.ANIMATED, MediaType.VIDEO -> StripContent(entry, input, gate, selected = entry.path in browser.selection)
             MediaType.PARTIAL -> OtherContent(entry, Icons.Rounded.Downloading, "incomplete")
-            MediaType.OTHER ->
-                if (entry.other.hasTextPreview || entry.other == OtherKind.UNKNOWN) TextContent(entry, gate)
-                else OtherContent(entry, iconFor(entry.other), formatSize(entry.size))
+            MediaType.OTHER -> PreviewContent(entry, gate)
         }
         val cfg = LocalTileConfig.current
-        val preview = entry.isMedia || LocalThumbnails.current.cached(entry.path) is Thumb.Text
+        val preview = entry.isMedia || LocalThumbnails.current.cached(entry.path).let { it is Thumb.Text || it is Thumb.Cover }
         val showName = cfg.showNames || input.focused || input.hovered || browser.selectionMode || input.noThumb
         if (preview && showName) NameOverlay(entry.name)
         if (playing) PlayingBadge()
@@ -552,6 +571,8 @@ private fun iconFor(kind: OtherKind): ImageVector = when (kind) {
     OtherKind.CODE -> Icons.Rounded.Code
     OtherKind.DOCUMENT -> Icons.Rounded.Description
     OtherKind.PDF -> Icons.Rounded.PictureAsPdf
+    OtherKind.BOOK -> Icons.AutoMirrored.Rounded.MenuBook
+    OtherKind.VECTOR -> Icons.Rounded.Gesture
     OtherKind.AUDIO -> Icons.Rounded.AudioFile
     OtherKind.ARCHIVE -> Icons.Rounded.FolderZip
     OtherKind.APK -> Icons.Rounded.Android
@@ -631,7 +652,7 @@ private fun BoxScope.StripContent(entry: FileEntry, input: TileInput, gate: Scro
  * their own while the grid is idle; hover and `Shift` + arrows still pick a group.
  */
 @Composable
-private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: ScrollGate, listen: ListenStatus?) {
+private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: ScrollGate, listen: ListenStatus?, onPlay: ((Boolean) -> Unit)?) {
     val st = rememberThumb(entry, gate)
     val folder = (st as? TileState.Ready)?.thumb as? Thumb.Folder
     val thumbs = LocalThumbnails.current
@@ -669,7 +690,8 @@ private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: Scr
                 tint = MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f),
                 modifier = Modifier.fillMaxSize(0.95f),
             )
-            if (stills.isEmpty() && folder != null && folder.candidates.isEmpty()) {
+            // No previews at all, or none of them could be drawn: the item count.
+            if (stills.isEmpty() && folder != null && (folder.candidates.isEmpty() || folder.groups[group]?.isEmpty() == true)) {
                 Text(
                     "${folder.itemCount} items",
                     style = MaterialTheme.typography.labelMedium,
@@ -678,6 +700,10 @@ private fun BoxScope.FolderContent(entry: FileEntry, input: TileInput, gate: Scr
             }
             Collage(stills)
             if (listen != null) ListenOverlay(listen)
+            // Books listened to, and folders with audio files directly inside (counted by the collage scan).
+            if (onPlay != null && (listen != null || (folder?.audioCount ?: 0) > 0)) {
+                TilePlayButton(playing = listen?.playing == true, onClick = { onPlay(false) }, onLongClick = { onPlay(true) })
+            }
         }
         TileName(
             entry.name,
@@ -714,12 +740,18 @@ internal fun BoxScope.Collage(stills: List<Still>) {
 }
 
 /**
- * Text, code and extensionless text files (README §3.10): the first lines on a paper-like background,
- * with the extension as a badge. The icon stays until the preview is ready, and for binary files.
+ * Other files: text, code and extensionless text files (README §3.10) show their first lines on a
+ * paper-like background, with the extension as a badge; documents, books, audio and apps show their
+ * cover, page or icon with a badge (todo §1.0). The icon stays until a preview is ready, and when there is none.
  */
 @Composable
-private fun BoxScope.TextContent(entry: FileEntry, gate: ScrollGate) {
-    val text = ((rememberThumb(entry, gate) as? TileState.Ready)?.thumb as? Thumb.Text)
+private fun BoxScope.PreviewContent(entry: FileEntry, gate: ScrollGate) {
+    val thumb = (rememberThumb(entry, gate) as? TileState.Ready)?.thumb
+    if (thumb is Thumb.Cover) {
+        CoverContent(thumb)
+        return
+    }
+    val text = thumb as? Thumb.Text
     if (text == null) {
         OtherContent(entry, iconFor(entry.other), formatSize(entry.size))
         return
@@ -734,6 +766,18 @@ private fun BoxScope.TextContent(entry: FileEntry, gate: ScrollGate) {
         modifier = Modifier.fillMaxSize(),
     )
     FileTypes.extension(entry.name)?.let { Badge(it.uppercase()) }
+}
+
+/** A cover, page or icon: whole on the tile's colour ([Thumb.Cover.fit]), or filling it from the top. */
+@Composable
+private fun BoxScope.CoverContent(c: Thumb.Cover) {
+    if (c.fit) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant))
+        Image(c.still.image, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(6.dp))
+    } else {
+        Image(c.still.image, contentDescription = null, contentScale = ContentScale.Crop, alignment = Alignment.TopCenter, modifier = Modifier.fillMaxSize())
+    }
+    c.badge?.let { Badge(it) }
 }
 
 @Composable

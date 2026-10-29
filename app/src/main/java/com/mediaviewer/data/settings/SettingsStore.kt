@@ -71,6 +71,13 @@ data class AppSettings(
     val textInApp: Boolean = true,
     /** The player is collapsed to its slim bar (todo §4.3). */
     val playerCompact: Boolean = false,
+    /** Skip back / forward in books and in music mode, seconds (todo §4.6). */
+    val skipBookSec: Int = 30,
+    val skipMusicSec: Int = 10,
+    /** The player leaves out silent stretches (todo §4.6). */
+    val skipSilence: Boolean = false,
+    /** The battery-optimisation hint has been shown once (todo §3.3). */
+    val batteryHintShown: Boolean = false,
 )
 
 /** README §7.2. The anchor is the key of the first visible item plus its pixel offset. */
@@ -148,6 +155,10 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val codeFontBundled = booleanPreferencesKey("code_font_bundled")
         val textInApp = booleanPreferencesKey("text_open_in_app")
         val playerCompact = booleanPreferencesKey("player_compact")
+        val skipBookSec = intPreferencesKey("skip_book_sec")
+        val skipMusicSec = intPreferencesKey("skip_music_sec")
+        val skipSilence = booleanPreferencesKey("skip_silence")
+        val batteryHint = booleanPreferencesKey("battery_hint_shown")
         val recent = stringPreferencesKey("recent")
         val session = stringPreferencesKey("session")
         val folderSorts = stringPreferencesKey("folder_sorts")
@@ -258,6 +269,10 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
             codeFontBundled = p[K.codeFontBundled] ?: d.codeFontBundled,
             textInApp = p[K.textInApp] ?: d.textInApp,
             playerCompact = p[K.playerCompact] ?: d.playerCompact,
+            skipBookSec = (p[K.skipBookSec] ?: d.skipBookSec).coerceIn(5, 60),
+            skipMusicSec = (p[K.skipMusicSec] ?: d.skipMusicSec).coerceIn(5, 60),
+            skipSilence = p[K.skipSilence] ?: d.skipSilence,
+            batteryHintShown = p[K.batteryHint] ?: false,
         )
     }
 
@@ -291,6 +306,10 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p[K.codeFontBundled] = s.codeFontBundled
         p[K.textInApp] = s.textInApp
         p[K.playerCompact] = s.playerCompact
+        p[K.skipBookSec] = s.skipBookSec
+        p[K.skipMusicSec] = s.skipMusicSec
+        p[K.skipSilence] = s.skipSilence
+        p[K.batteryHint] = s.batteryHintShown
     }
 
     private inline fun <reified E : Enum<E>> enumOr(name: String?, default: E): E =

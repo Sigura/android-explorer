@@ -16,6 +16,8 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.captionBar
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -50,6 +53,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.ripple
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,12 +65,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.mediaviewer.data.fs.FileTypes
@@ -147,6 +154,52 @@ fun TipIconButton(label: String, onClick: () -> Unit, enabled: Boolean = true, m
     }
     TooltipBox(TooltipDefaults.rememberPlainTooltipPositionProvider(), tooltip = { PlainTooltip { Text(label) } }, state = tip) {
         IconButton(onClick = onClick, enabled = enabled, interactionSource = interaction, modifier = modifier.pointerHoverIcon(PointerIcon.Hand)) { content() }
+    }
+}
+
+/**
+ * [TipIconButton] that also takes a long press (the folder ▶ button: long press opens the player
+ * screen, todo §4.1). [longClickLabel] is read by TalkBack.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun TipIconButton(
+    label: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    longClickLabel: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val tip = rememberTooltipState()
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    LaunchedEffect(hovered) {
+        if (hovered) {
+            delay(500)
+            tip.show()
+        } else {
+            tip.dismiss()
+        }
+    }
+    TooltipBox(TooltipDefaults.rememberPlainTooltipPositionProvider(), tooltip = { PlainTooltip { Text(label) } }, state = tip) {
+        Box(
+            modifier
+                .minimumInteractiveComponentSize()
+                .size(40.dp)
+                .clip(CircleShape)
+                .combinedClickable(
+                    interactionSource = interaction,
+                    indication = ripple(),
+                    role = Role.Button,
+                    onClickLabel = label,
+                    onLongClickLabel = longClickLabel,
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                )
+                .pointerHoverIcon(PointerIcon.Hand),
+            contentAlignment = Alignment.Center,
+        ) { content() }
     }
 }
 

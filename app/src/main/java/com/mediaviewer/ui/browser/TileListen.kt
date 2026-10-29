@@ -1,6 +1,9 @@
 package com.mediaviewer.ui.browser
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -10,11 +13,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -26,8 +32,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -99,4 +108,39 @@ private fun BoxScope.ListenProgress(fraction: Float) {
                 drawRect(bar, Offset.Zero, Size(size.width * fraction, size.height))
             },
     )
+}
+
+/**
+ * The folder tile's ▶ / resume button (todo §3.2), bottom-right of the collage: starts or
+ * continues the book without opening the folder; ⏸ while this book plays. A long press opens the
+ * player screen as well. 40 dp to touch, 32 dp to see.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun BoxScope.TilePlayButton(playing: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val label = if (playing) "Pause" else "Listen"
+    Box(
+        Modifier
+            .align(Alignment.BottomEnd)
+            .padding(2.dp)
+            .size(40.dp)
+            .clip(CircleShape)
+            .combinedClickable(
+                role = Role.Button,
+                onClickLabel = label,
+                onLongClickLabel = "Listen and open the player",
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(22.dp))
+        }
+    }
 }
