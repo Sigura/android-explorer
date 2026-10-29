@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackParameters
@@ -23,6 +24,7 @@ import com.mediaviewer.MediaViewerApp
 import com.mediaviewer.data.history.BookFolder
 import com.mediaviewer.data.history.ResumePoint
 import com.mediaviewer.domain.Book
+import com.mediaviewer.domain.Skip
 import com.mediaviewer.domain.model.FileEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -69,8 +73,6 @@ class PlaybackService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
-            .setSeekBackIncrementMs(SKIP_MS)
-            .setSeekForwardIncrementMs(SKIP_MS)
             .build()
         // Listen only: no video decoding, so a lecture costs about as much battery as an MP3.
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -82,7 +84,11 @@ class PlaybackService : MediaSessionService() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        session = MediaSession.Builder(this, player).setCallback(callback).setSessionActivity(open).build()
+        session = MediaSession.Builder(this, SkipPlayer(player)).setCallback(callback).setSessionActivity(open).build()
+        // Skip silence is a setting (todo §4.6); the service shares the app's process and settings.
+        scope.launch {
+            app.settings.settings.map { it.skipSilence }.distinctUntilChanged().collect { player.skipSilenceEnabled = it }
+        }
         running = true
     }
 
@@ -102,6 +108,30 @@ class PlaybackService : MediaSessionService() {
         session = null
         player.release()
         super.onDestroy()
+    }
+
+    /** Skip length now: the settings for books or music mode (todo §4.6). */
+    private fun skipMs(): Long = app.settings.settings.value.let { Skip.ms(musicMode, it.skipBookSec, it.skipMusicSec) }
+
+    /**
+     * The player the session (and so the app, the notification, the lock screen and headsets)
+     * sees: ExoPlayer's seek increments are fixed when it is built, so skips are done here, with
+     * the length from the settings and the folder's mode. Past the end of a file: the next one.
+     */
+    private inner class SkipPlayer(p: ExoPlayer) : ForwardingPlayer(p) {
+        override fun getSeekBackIncrement(): Long = skipMs()
+        override fun getSeekForwardIncrement(): Long = skipMs()
+
+        override fun seekBack() = seekTo((currentPosition - skipMs()).coerceAtLeast(0))
+
+        override fun seekForward() {
+            val dur = duration
+            val target = currentPosition + skipMs()
+            when {
+                dur == C.TIME_UNSET || target < dur -> seekTo(target)
+                hasNextMediaItem() -> seekToNextMediaItem()
+            }
+        }
     }
 
     private val callback = object : MediaSession.Callback {
@@ -127,6 +157,9 @@ class PlaybackService : MediaSessionService() {
                     result.setException(IllegalStateException("Nothing to resume"))
                 } else {
                     player.setPlaybackSpeed(point.speed)
+                    player.volume = 1f
+                    player.repeatMode = point.repeat
+                    musicMode = point.music
                     result.set(MediaSession.MediaItemsWithStartPosition(mediaItems(point), point.index, point.positionMs))
                 }
             }
@@ -149,7 +182,8 @@ class PlaybackService : MediaSessionService() {
             if (isPlaying) {
                 idleJob?.cancel()
                 if (pausedAt > 0) {
-                    val back = Book.rewindMs(System.currentTimeMillis() - pausedAt)
+                    // Music mode resumes where it stopped (todo §3.1).
+                    val back = if (musicMode) 0L else Book.rewindMs(System.currentTimeMillis() - pausedAt)
                     if (back > 0) player.seekTo((player.currentPosition - back).coerceAtLeast(0))
                     pausedAt = 0
                 }
@@ -235,7 +269,12 @@ class PlaybackService : MediaSessionService() {
         @Volatile var running = false
             private set
 
-        const val SKIP_MS = 30_000L
+        /**
+         * The folder playing is in music mode (todo §3.1): no smart rewind on resume. Set by
+         * [BookPlayer], which runs in the same process, when a book starts or shuffle changes.
+         */
+        @Volatile var musicMode = false
+
         private const val SAVE_EVERY_MS = 5_000L
         private const val IDLE_STOP_MS = 30 * 60_000L
 

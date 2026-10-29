@@ -30,7 +30,13 @@ class MediaViewerApp : Application(), SingletonImageLoader.Factory {
     val errors by lazy { ErrorReporter(this, appScope) }
     val settings by lazy { SettingsStore(this, appScope) }
     val meta by lazy { MetaStore(this) }
-    val thumbnails by lazy { Thumbnails(meta, errors).also { it.remote = { path -> mtp.thumbnail(path) } } }
+    val thumbnails by lazy {
+        Thumbnails(meta, errors).also {
+            it.remote = { path -> mtp.thumbnail(path) }
+            it.packageManager = packageManager
+            it.contentResolver = contentResolver
+        }
+    }
 
     /** Cameras and phones over USB (todo §9). */
     val mtp by lazy { MtpDevices(this, appScope) }

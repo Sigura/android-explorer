@@ -12,8 +12,10 @@ import com.mediaviewer.data.fs.FileTypes
 import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.FolderScanner
 import com.mediaviewer.data.fs.TAG
+import com.mediaviewer.data.history.FileHistory
 import com.mediaviewer.data.meta.MediaMeta
 import com.mediaviewer.data.settings.SlideshowSession
+import com.mediaviewer.domain.Book
 import com.mediaviewer.domain.SlideOrder
 import com.mediaviewer.domain.SlideTimer
 import com.mediaviewer.domain.SlideTiming
@@ -118,8 +120,15 @@ class SlideshowController(
 
     private class Visit(val elapsedMs: Long, val showMs: Long, val positionMs: Long)
 
+    /**
+     * Listening positions of this folder's files (todo §3.6): a lecture listened to halfway starts
+     * there here too, and the position the slideshow reaches goes back to the book.
+     */
+    private var listened: Map<String, FileHistory> = emptyMap()
+
     init {
         scope.launch {
+            listened = vm.listenPositions(listing.path)
             val e = withContext(Dispatchers.IO) { FolderScanner.entryFor(File(startPath), true) }
             if (e == null) {
                 vm.errors.notify("File not found", startPath)
@@ -224,6 +233,7 @@ class SlideshowController(
             if (t != null && shown > 0) {
                 visits[old.path] = Visit(shown, t.showMs, positionOf(old))
             }
+            saveListened(old)
         }
         // An item that was shown to its end, or nearly, starts over instead of flashing by.
         val visit = if (dir < 0) visits.remove(e.path)?.takeIf { it.showMs - it.elapsedMs >= MIN_LEFT_MS } else null
@@ -243,6 +253,7 @@ class SlideshowController(
         resumePositionMs = when {
             visit != null -> visit.positionMs
             firstShow && resume?.current == e.path -> resume.positionMs
+            e.type == MediaType.VIDEO -> listened[e.path]?.takeIf { !it.finished }?.positionMs ?: 0L
             else -> 0L
         }
         videoPositionMs = resumePositionMs
@@ -431,6 +442,20 @@ class SlideshowController(
 
     fun touchMenu() {
         menuTouch = SystemClock.uptimeMillis()
+    }
+
+    /** A video that has a listening position: where the slideshow left it goes back to the book. */
+    private fun saveListened(e: FileEntry) {
+        if (e.type != MediaType.VIDEO || e.path !in listened) return
+        val pos = positionOf(e).takeIf { it > 0 } ?: videoPositionMs
+        val finished = meta?.durationMs?.let { Book.isFinished(pos, it) } == true
+        listened = listened + (e.path to FileHistory(e.path, if (finished) 0 else pos, finished))
+        vm.saveListenPosition(e.path, pos, finished)
+    }
+
+    /** The slideshow goes away, by any way out (Back, the menu, Esc): the item on screen saves its listening position. */
+    fun onLeave() {
+        current?.let(::saveListened)
     }
 
     fun close(message: String? = null) {

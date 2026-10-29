@@ -90,6 +90,9 @@ dependencies {
     // FFmpeg audio decoders (AC-3, E-AC-3, DTS, TrueHD, …) for files the device can't decode itself.
     implementation(libs.media3.ffmpeg)
 
+    // SVG tiles (todo §10.10); no other SVG use.
+    implementation(libs.androidsvg)
+
     testImplementation(libs.junit)
     testImplementation(libs.json)
 }

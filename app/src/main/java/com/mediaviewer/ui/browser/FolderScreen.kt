@@ -127,7 +127,11 @@ import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.fs.Volumes
 import com.mediaviewer.data.history.FolderHistory
+import com.mediaviewer.data.history.LECTURE_AUTO
+import com.mediaviewer.data.history.LECTURE_NO
+import com.mediaviewer.data.history.LECTURE_YES
 import com.mediaviewer.data.mtp.MtpPaths
+import com.mediaviewer.domain.Book
 import com.mediaviewer.domain.BookKind
 import com.mediaviewer.domain.ListenStatus
 import com.mediaviewer.domain.SortBy
@@ -215,10 +219,20 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
     // Play button (todo §3.7): book playback for audio, mixed and lecture folders, else the slideshow.
     // Classified on IO once the listing is complete, and again when the folder changes.
     var bookKind by remember(listing.path) { mutableStateOf<BookKind?>(null) }
-    LaunchedEffect(entries, status, settings.longVideoMin) {
+    // The lecture override (todo §3.6), read once per folder and changed from the menu.
+    var lecture by remember(listing.path) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(listing.path) { if (!remote) lecture = vm.lectureMode(listing.path) }
+    LaunchedEffect(entries, status, settings.longVideoMin, lecture) {
         if (status != FolderListing.Status.DONE) return@LaunchedEffect
         delay(300) // live updates come in bursts
-        bookKind = vm.bookKind(entries)
+        bookKind = vm.bookKind(entries, lecture ?: LECTURE_AUTO)
+    }
+    // Offered for folders of videos without audio: the only ones a lecture choice changes.
+    val lectureChoice = lecture?.takeIf { !remote && entries.none(Book::isAudio) && entries.any { it.type == MediaType.VIDEO } }?.let { mode ->
+        LectureChoice(mode) { m ->
+            lecture = m
+            vm.setLectureMode(listing.path, m)
+        }
     }
     val canPlay = bookKind != null || entries.any { it.isMedia }
     browser.entries = entries
@@ -368,10 +382,11 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                         true
                     }
                     ev.key == Key.P && !ev.isCtrlPressed && canPlay && !browser.selectionMode ->
-                        vm.playFolder(listing.path, entries, bookKind).let { true }
+                        vm.playFolder(listing.path, entries, bookKind, showPlayer = ev.isShiftPressed).let { true }
                     ev.key == Key.Escape && browser.selectionMode -> browser.clearSelection().let { true }
                     ev.isCtrlPressed && ev.key == Key.A -> browser.selectAll().let { true }
                     ev.isCtrlPressed && ev.key == Key.C && !remote -> copyFiles(ctx, browser.keyTargets()).let { true }
+                    ev.isCtrlPressed && ev.key == Key.V && !remote && !browser.selectionMode -> vm.pasteInto(listing.path).let { true }
                     ev.key == Key.Delete -> browser.delete(browser.keyTargets()).let { true }
                     ev.key == Key.PageDown -> focusBy(1).let { true }
                     ev.key == Key.PageUp -> focusBy(-1).let { true }
@@ -439,6 +454,18 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                     EntryTile(
                         e, browser, gate, requestFocus = e.path == focusTarget, playing = e.path == playingPath,
                         listen = if (e.type == MediaType.FOLDER) listenStatus(e.path, nowPlaying, books) else null,
+                        // Files dragged from other apps onto a folder tile go into that folder (todo §10.10).
+                        onDropInto = if (e.type == MediaType.FOLDER && !remote) { uris, release -> vm.importDropped(uris, e.path, release) } else null,
+                        onPlay = if (e.type == MediaType.FOLDER && !remote) { show ->
+                            // The book playing: ▶ pauses and plays it (a long press shows the player); any other starts or continues.
+                            when {
+                                nowPlaying?.folder != e.path -> vm.playBook(e.path, show)
+                                show -> vm.showOverlay(Overlay.PLAYER)
+                                else -> vm.bookPlayer.togglePlay()
+                            }
+                        } else {
+                            null
+                        },
                         modifier = Modifier.aspectRatio(4f / 3f),
                     )
                 }
@@ -465,7 +492,9 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                     else Volumes.rootOf(listing.path, volumes),
                     settings.favourites, tileDp, compact = maxWidth < 600.dp, remote = remote,
                     play = if (canPlay) ({ vm.playFolder(listing.path, entries, bookKind) }) else null,
+                    playAndShow = if (canPlay && bookKind != null) ({ vm.playFolder(listing.path, entries, bookKind, showPlayer = true) }) else null,
                     playLabel = if (bookKind != null) "Listen" else "Slideshow",
+                    lecture = lectureChoice,
                     onNew = { newItem = it },
                     sort = SortChoice(
                         sort, own = listing.path in folderSorts, open = sortMenu,
@@ -572,7 +601,11 @@ private fun TopBar(
     remote: Boolean,
     /** Folder Play button (todo §3.7); null hides it. */
     play: (() -> Unit)?,
+    /** Long press on the Listen button: play and open the player screen (todo §4.1). */
+    playAndShow: (() -> Unit)?,
     playLabel: String,
+    /** Folders of videos: listen to them as lectures or not (todo §3.6); null = not offered. */
+    lecture: LectureChoice?,
     onNew: (NewItem) -> Unit,
     sort: SortChoice,
 ) {
@@ -641,7 +674,11 @@ private fun TopBar(
                     SortMenu(sort)
                 }
             }
-            if (play != null) {
+            if (play != null && playAndShow != null) {
+                TipIconButton("$playLabel (P) · hold for the player", onClick = play, onLongClick = playAndShow, longClickLabel = "Listen and open the player") {
+                    Icon(Icons.Rounded.Headphones, contentDescription = playLabel)
+                }
+            } else if (play != null) {
                 TipIconButton("$playLabel (P)", onClick = play) {
                     Icon(if (playLabel == "Listen") Icons.Rounded.Headphones else Icons.Rounded.PlayArrow, contentDescription = playLabel)
                 }
@@ -672,6 +709,10 @@ private fun TopBar(
                             Item(favLabel, favIcon) { vm.toggleFavourite(path) }
                         }
                         Item("Settings", Icons.Rounded.Settings) { vm.showOverlay(Overlay.SETTINGS) }
+                        if (lecture != null) {
+                            HorizontalDivider()
+                            LectureItems(lecture) { menu = false }
+                        }
                     }
                     // Opened from the menu item or `S`, in the menu's place.
                     SortMenu(sort)
@@ -685,11 +726,40 @@ private fun TopBar(
                     }
                 }
                 TipIconButton(favLabel, onClick = { vm.toggleFavourite(path) }) { Icon(favIcon, contentDescription = favLabel) }
+                if (lecture != null) {
+                    var lectureMenu by remember { mutableStateOf(false) }
+                    Box {
+                        TipIconButton("Videos: listen as lectures?", onClick = { lectureMenu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "Lecture folder") }
+                        DropdownMenu(expanded = lectureMenu, onDismissRequest = { lectureMenu = false }) { LectureItems(lecture) { lectureMenu = false } }
+                    }
+                }
                 TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             } else {
                 TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             }
         }
+    }
+}
+
+/** The lecture override of a folder of videos (todo §3.6): its [mode] and how to change it. */
+internal class LectureChoice(val mode: Int, val onPick: (Int) -> Unit)
+
+/** *Listen as audio* / *Not a lecture folder* / *Decide automatically*, the current one checked. */
+@Composable
+private fun LectureItems(choice: LectureChoice, close: () -> Unit) {
+    listOf(
+        LECTURE_YES to "Listen as audio (lectures)",
+        LECTURE_NO to "Not a lecture folder",
+        LECTURE_AUTO to "Decide automatically",
+    ).forEach { (mode, label) ->
+        DropdownMenuItem(
+            text = { Text(label) },
+            leadingIcon = { if (choice.mode == mode) Icon(Icons.Rounded.Check, contentDescription = "Chosen") else Spacer(Modifier.size(24.dp)) },
+            onClick = {
+                close()
+                choice.onPick(mode)
+            },
+        )
     }
 }
 
@@ -888,5 +958,7 @@ private fun listenStatus(path: String, now: NowPlaying?, books: Map<String, Fold
         return ListenStatus(now.index, now.count, now.positionMs, now.durationMs, finished = false, playing = now.playing)
     }
     val h = books[path] ?: return null
+    // A row with only music mode saved, or a book started over: nothing heard yet.
+    if (h.currentPath == null && !h.finished) return null
     return ListenStatus(h.index, h.total, h.positionMs, h.durationMs, h.finished)
 }

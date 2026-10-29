@@ -66,6 +66,8 @@ class BrowserState(
             e.type == MediaType.VIDEO && !selectionMode -> openVideo(e)
             e.isMedia -> vm.openSlideshow(e)
             e.type == MediaType.PARTIAL || selectionMode -> Unit
+            // The book player (todo §4.1); other apps from the context menu.
+            e.type == MediaType.OTHER && e.other == OtherKind.AUDIO -> vm.playAudio(e, orElse = { openWith(e, chooser = false) })
             canEdit(e) && vm.settings.value.textInApp -> edit(e)
             else -> openWith(e, chooser = false)
         }
@@ -122,7 +124,8 @@ class BrowserState(
             } catch (ex: Exception) {
                 0L
             }
-            if (duration > limit && ExternalApps.open(context, e)) return@launch
+            // A lecture listened to halfway starts there in the other player too (todo §3.6).
+            if (duration > limit && ExternalApps.open(context, e, positionMs = vm.listenPosition(e.path))) return@launch
             vm.openSlideshow(e)
         }
     }
