@@ -47,9 +47,12 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Image tiles with smart crop (crop if ≤ 10 % is lost, else fit)                                                                                        | ✅                           |
 | GIF and video tiles: 5 frames (10–90 %), scrub by hover or swipe, auto-preview on rest or focus, duration / `GIF` badge                               | ✅                           |
 | Large-GIF guard: first frame only until the tile is hovered or swiped                                                                                 | ✅                           |
-| Animated WebP strips in tiles (own container reader, frames composited like GIFs); AVIF / APNG: first frame                                           | ✅ WebP (§3.4), AVIF ❌ (§6)  |
-| Icons for other files (text, code, document, PDF, audio, archive, APK, unknown), partial downloads and broken files                                   | ✅                           |
+| Animated WebP and APNG strips in tiles (own container readers, frames composited like GIFs); AVIF: first frame                                        | ✅ WebP, APNG (§3.4), AVIF ❌ (§6)|
+| Video tiles start with MediaStore's own thumbnail (Android 10+) while the strip decodes                                                               | ✅ (§3.4)                    |
+| Icons for other files (text, code, document, PDF, book, audio, archive, APK, unknown), partial downloads and broken files                                   | ✅                           |
 | Text previews: first lines of text, code, subtitles and extensionless text files; UTF-8/16 and Cyrillic code pages                                    | ✅                           |
+| Previews of other files: PDF page 1, album art, EPUB / FB2 / CBZ covers, Office thumbnails, DOCX text, APK icons, SVG; CSV as a table                 | ✅ (§3.15)                   |
+| Folders without photos or videos: a collage of those previews instead of the item count                                                               | ✅ (§3.15)                   |
 | Junk names: double extensions (`a.mp4.gif`), junk extensions (`a.webm'`, `a.php?id=1`), magic-byte sniffing                                           | ✅                           |
 | Hidden files (`.`-prefixed, `.nomedia` folders) hidden by default                                                                                     | ✅                           |
 | Selection mode: long press / two-finger tap / double-click / right-click / `Space`; drag to select a range, with edge auto-scroll                     | ✅                           |
@@ -63,10 +66,18 @@ The original task description is kept in [docs/SPEC.md](docs/SPEC.md).
 | Books: position saved per file and folder, smart rewind, `.m3u` / `.m3u8` play order, natural name order otherwise                                    | ✅                           |
 | Lecture folders: long videos played as audio only (the picture is never decoded)                                                                      | ✅                           |
 | Player at the bottom of the root and folder screens: seek bar, book progress, speed, sleep timer, collapsible; the playing file's tile is marked and takes the focus                          | ✅                           |
-| Full player screen, speed, sleep timer, shuffle, chapters, lyrics                                                                                     | ❌ planned (todo.md §3–4)    |
+| Player screen: cover, file list with ✓ / ◐, seek bar with chapter ticks, keyboard and TV remote; two panes on wide windows                            | ✅ (§2 Listening)            |
+| Speed 0.5–3× in 0.05 steps (kept per book); sleep timer: any minutes, end of file or chapter, 10 s fade-out, shake for 5 more min                     | ✅                           |
+| Shuffle per folder (music mode: own skip length, repeat, no resume rewind, no book bar); a tap on an audio file plays its folder from it              | ✅                           |
+| ▶ on folder tiles of books and audio folders; *Continue listening* on the home screen; *Start over?* for finished books                               | ✅                           |
+| Skip lengths for books and music (5–60 s), also on the lock screen and headsets; skip silence                                                         | ✅                           |
+| Lectures: ⋮ *Listen as audio* / *Not a lecture folder*; one position per video shared with the slideshow and the external player                      | ✅                           |
+| Subtitle tracks inside MKV / MP4 videos; CC switch per folder; a video frame as the cover                                                             | ✅                           |
+| Player ⋮: *File info*, *Share*; time bubble while seeking; a renamed or moved book keeps its history                                                  | ✅                           |
+| Chapters (M4B / MP4, MP3 `CHAP`, Matroska, `.cue`); lyrics and subtitles (`.lrc`, `.srt`, `.vtt`, embedded `USLT` / `©lyr`)                           | ✅                           |
 | Desktop clicks (auto in DeX and on Chromebooks): click focuses, double-click opens, right-click opens a context menu, `Ctrl` / `Shift` + click select | ✅                           |
 | Drag files out to other apps; `Ctrl` + C copies files to the clipboard; Delete deletes                                                                | ✅                           |
-| Drop files or folders from other apps into the open folder (copied)                                                                                   | ✅ (§2 Desktops)             |
+| Drop files or folders from other apps into the open folder, or onto a folder tile; `Ctrl` + V pastes copied files                                     | ✅ (§2 Desktops)             |
 
 ### Text editor
 
@@ -224,13 +235,41 @@ The **▶ / 🎧 button** in the folder's top bar (or `P`) plays the folder:
 - Any other folder with media: ▶ starts the slideshow from the first item.
 - Tapping a single video still watches it. The player never shows video: lectures are listened to.
 
-Playback continues in the background with the screen off. The **player** at the bottom of the root and folder screens shows, top to bottom: the book bar (one segment per file, as wide as the file is long, played ones filled; a tap starts that file), the title (without the extension) over the folder, `3 / 24` and where we are in the whole book (`2:13:05 / 9:41:00 · 7:28:10 left`, the time left at the playback speed, `≈` until every file's duration has been read in the background), a seek bar with the elapsed and remaining time (dragging previews the target and seeks on release), then the speed (0.75–2×, kept per book), ⏮ previous file, −30 s, play / pause (a ring while the file loads), +30 s, ⏭ next file and the sleep timer (15 / 30 / 60 min or at the end of this file). ✕ stops while paused. A tap on the title opens the folder playing. ⌄ or a swipe down collapses it to a one-row bar (title, position, −30 s, play / pause, +30 s); ⌃ or a swipe up expands it again; the choice is kept. ⏮ goes to the previous file within the first 3 s of one, later to the start of the current file; ⏭ is disabled on the last file. When the book's folder is open, the playing file's tile carries a *playing* mark, and it takes the focus (scrolled into view) when playback starts from the folder and on every change of file. The lock screen, the notification, Bluetooth and headset buttons control it too, and a headset Play after the app was killed continues the last book.
+Playback continues in the background with the screen off. The **player** at the bottom of the root and folder screens shows, top to bottom: the book bar (one segment per file, as wide as the file is long, played ones filled; a tap starts that file), the title (without the extension) over the folder, `3 / 24` and where we are in the whole book (`2:13:05 / 9:41:00 · 7:28:10 left`, the time left at the playback speed, `≈` until every file's duration has been read in the background), a seek bar with the elapsed and remaining time (dragging previews the target and seeks on release), then the speed (0.75–2×, kept per book), ⏮ previous file, −30 s, play / pause (a ring while the file loads), +30 s, ⏭ next file and the sleep timer (15 / 30 / 60 min or at the end of this file). ✕ stops while paused. A tap on the title, or a swipe up on the full bar, opens the **player screen** (below). ⌄ or a swipe down collapses it to a one-row bar (title, position, −30 s, play / pause, +30 s); ⌃ or a swipe up expands it again; the choice is kept. ⏮ goes to the previous file within the first 3 s of one, later to the start of the current file; ⏭ is disabled on the last file. When the book's folder is open, the playing file's tile carries a *playing* mark, and it takes the focus (scrolled into view) when playback starts from the folder and on every change of file. The lock screen, the notification, Bluetooth and headset buttons control it too, and a headset Play after the app was killed continues the last book.
+
+**Player screen.** Opened from the bar (above), by holding the folder's 🎧 button (or `Shift` + P), and by tapping an audio file — which plays its folder from that file (at its saved place; *Open with…* in the tile menu still offers other apps). Back or `Esc` returns where it was; the folder name at the top (or ⋮ → *Open the folder*) opens the folder playing. Top to bottom:
+
+- the cover — the file's own picture, else the image named like the file (`yt-dlp` thumbnails), `cover` / `folder` / `front`, `AlbumArt…`, the only image of the folder, else the folder's initial on a colour from its name; the same picture blurred behind the screen. A tap plays or pauses, a double tap on the left / right half skips back / forward, a sideways swipe changes the file;
+- the file name (cut in the middle, so the number and the extension stay), the title tag below it when it differs, `Track 7 / 42 · 3 h 12 min left`, and the chapter playing (`Chapter 3 / 12 · Title`; a tap lists the chapters);
+- synced lyrics or subtitles: the line playing highlighted between the one before and the one after; a tap shows them all, and there a tap on a line plays from it;
+- the seek bar, with a tick at every chapter start, and the book bar;
+- ⏮ −30 s ▶ +30 s ⏭ — with chapters, ⏮ / ⏭ move by chapter inside the file (⏮ within 3 s of a chapter start goes to the one before) and past the first / last chapter to the other file;
+- speed (presets, −/+ 0.05, a slider over 0.5–3×; kept per book), the sleep timer, 🔀 shuffle, chapters and lyrics;
+- below, a list with tabs — *Files* (✓ heard, ◐ partly heard with a small bar, the one playing marked and kept in view; a tap plays a file at its saved place, a long press marks it heard or not), *Chapters*, *Lyrics* / *Subtitles*. Drag its handle up (or tap it) for the whole list. Wide windows (landscape tablets, DeX) show the controls and the list side by side.
+
+⋮ also has *File info* (size, date, duration, format, codec, bitrate, sample rate, channels and the tags), *Share*, *Start over* (forgets the book's positions and plays from the first file), *Mark as finished* and *Stop*. While the seek bar is dragged, the target time shows above it. **CC** hides or shows the synced lines under the title for this folder; all lines stay in the list's *Lyrics* / *Subtitles* tab.
+
+Keys: `Space` / `K` play / pause, `J` / `L` skip back / forward, `Shift` + `←` / `→` or `P` / `N` previous / next (chapter or file), `[` / `]` slower / faster, `Home` the start of the file, `End` the end of the chapter or file, `Esc` back; media keys work too. With a keyboard or a TV remote the cover takes the focus: `←` / `→` skip, holding one changes the file, `Enter` plays or pauses; `↑` / `↓` move through the buttons.
+
+**Sleep timer:** 5–90 min or any number of minutes, the end of this file, or the end of this chapter. The sound fades out over the last 10 s; shaking the phone then (or tapping the timer) adds 5 minutes.
+
+**Shuffle (music mode)**, kept per folder: the files play in a stable random order without repeats (the slideshow's random order, with the file playing first), and the queue stops after the last one unless **repeat** (🔁, music mode only: off / all / this file, kept per folder) says otherwise. Skips use the music length (10 s by default), there is no rewind on resume, a file picked from the list starts from its beginning, and the book bar is hidden. Turning shuffle off goes back to the playlist / name order from the file playing.
+
+**Chapters** come from the file — M4B / MP4 chapter tracks and Nero `chpl` lists, MP3 `CHAP` frames, Matroska / WebM chapters — or from a `.cue` sheet beside one large `.flac` / `.mp3` / `.ape` (a sheet written for `.wav` matches the file of the same name). **Lyrics and subtitles:** a `.lrc` (synced; several times on one line, `[offset:]`), `.srt` or `.vtt` beside the file — the same name, or a language variant like `Talk.en.vtt`, the device language first, then English — else the lyrics inside the file (MP3 `SYLT` and `USLT`, MP4 `©lyr`, FLAC / Ogg / Opus `LYRICS`; text that looks like LRC is synced). FLAC / Ogg / Opus files can also carry chapters (`CHAPTER001=00:00:00.000`, `CHAPTER001NAME=…`). YouTube's rolling automatic captions are de-duplicated.
+
+**Lectures.** A folder of videos without audio is a lecture folder when every video is longer than the long-video setting; ⋮ in the folder's top bar (on wide screens its own ⋮ button) overrides that: *Listen as audio (lectures)*, *Not a lecture folder*, *Decide automatically*, kept per folder. A video listened to halfway starts there in the slideshow and in the external player; leaving it in the slideshow saves where it stopped back to the book (external players don't report their position: that direction is one-way). Without a picture inside the file or an image named like it (`yt-dlp` thumbnails), the cover is a frame from 10 % into the video. Subtitles: a `.srt` / `.vtt` beside the video, else the video's own text subtitle track (Matroska SRT / ASS / WebVTT, MP4 `tx3g`; the device language first, then the default track).
+
+**Moved books.** A book whose folder was renamed or moved keeps its history: when a folder without history is played, its files are compared (name and size) with the books whose folder is gone, and one clear match takes that history over. Books on an unplugged SD card are not taken.
 
 Order: the folder's `.m3u` / `.m3u8` playlist if there is one (the one named like the folder, otherwise the first), then files it doesn't list; without a playlist, natural file-name order (`2` before `10`), whatever the folder view's sort.
 
 **Folder tiles** of books show where they stand: a pill over the collage with 🎧 (started), an equalizer (playing now) or ✓ (finished), and the longest label that fits the tile — `12/30` on a small tile, `12/30 · 4:05` on a medium one, `File 12 of 30 · 4:05 / 25:10` on a wide one (`Finished · 30 files` when done) — and a progress line along the bottom of the collage. Books last played before this version show only the position until they are played again.
 
-Resume: the current file and position are saved; resuming after a pause goes back 5 s (pause over 1 min) or 20 s (over 1 h). A finished book starts over.
+Resume: the current file and position are saved; resuming after a pause goes back 5 s (pause over 1 min) or 20 s (over 1 h), except in music mode. Play on a finished book asks *Start over?* first.
+
+**Skips** are 30 s in books and 10 s in music mode; Settings → *Listening* sets both (5–60 s), and the notification, the lock screen, Bluetooth and headsets skip the same. **Skip silence** (Settings, or the switch in the speed dialog) leaves out silent stretches in every book.
+
+**Starting a book without opening it:** folder tiles of books already listened to, and of folders with audio files directly inside, have a round ▶ at the bottom right (⏸ while that book plays); holding it opens the player screen too. The home screen's ***Continue listening*** row shows the last 5 books — cover, name, the tile's status pill and progress line, and the same ▶; a tap on a card opens its folder at the current file. Phones whose battery savers are known to stop background playback (Samsung, Xiaomi, Huawei, Oppo, Vivo, OnePlus…) show a one-time hint with a way to the battery optimisation list.
 
 ### Slideshow
 
@@ -334,15 +373,19 @@ Maintenance: clear thumbnail cache, error log, favourite folders.
 app/src/main/java/com/mediaviewer/
   MainActivity.kt, MediaViewerApp.kt   splash, navigation root, snackbars, Coil setup
   domain/        FileEntry, NaturalOrder, Sorting, SmartCrop, SlideTimer, SlideOrder, Book + Playlist,
-                 Highlight (syntax colours), EditHistory (undo)   (pure Kotlin)
+                 Highlight (syntax colours), EditHistory (undo), Lyrics + Companions (lyrics, subtitles,
+                 cover names), Chapters + CueSheet, PlayerRules (shuffle order, speed steps, sleep fade)   (pure Kotlin)
   data/fs/       FileTypes, FolderScanner, FolderListing, Volumes, Trash, FileOps,
                  TextFile (editor load / save / create / rename), Drafts (unsaved editor text),
                  DropImport (files dropped from other apps)
   data/thumbs/   Thumbnails (scheduler, LRU, watchdogs), GifCodec (scanner + decoder),
-                 WebpAnim (animated WebP container: scan, frames, key frames),
+                 WebpAnim (animated WebP container: scan, frames, key frames), ApngAnim (APNG chunks, frames, compositing order),
+                 ZipIndex + DocCovers (covers inside EPUB / CBZ / ODF / OOXML / FB2),
                  TextDecode (text sniffing, charsets; pure Kotlin), TextPreview (text tiles)
   data/meta/     MetaStore (SQLite metadata cache)
   data/history/  HistoryStore (history.db: listening positions), BookFolder (queue + resume point)
+  data/tags/     MediaTags (chapters and lyrics inside MP3 / MP4 / Matroska; pure Kotlin),
+                 TrackExtras (chapters, lyrics, title and cover of the file playing)
   playback/      PlaybackService (MediaSessionService), BookPlayer (MediaController for the UI)
   data/settings/ SettingsStore (DataStore)
   data/          ErrorReporter, Blocking (abandonable calls)
@@ -355,9 +398,11 @@ app/src/main/java/com/mediaviewer/
   ui/editor/     EditorScreen, EditorState (text, undo, saving, find, rename), EditorFind (find bar, rename dialog)
   ui/slideshow/  SlideshowScreen, SlideshowController, SlideGestures, SlideshowMenu
   ui/settings/   SettingsScreen, ErrorLogScreen
-  ui/playback/   MiniPlayer
+  ui/playback/   MiniPlayer, PlayerScreen
   ui/common/     Common (share, copy), ExternalApps (open with other apps, external player lookup)
 tools/check-media-folder.sh             runs the app code over a real folder
+tools/pure-tests.sh                     the pure-Kotlin tests without Gradle or the SDK
+tools/typecheck/                        whole-app type check without the SDK (run.sh, stubs, resolve.py)
 build-apk.sh                            build / install script
 ```
 
@@ -376,6 +421,8 @@ build-apk.sh                            build / install script
 
 - **Stills** are decoded straight to tile size. `ImageDecoder` handles HEIC/AVIF/WebP and EXIF rotation, and shows truncated files partially.
 - **Videos:** one block on one thread opens a `MediaMetadataRetriever`, reads duration and size, takes 5 keyframe-accurate scaled frames, and releases it. The first frame is handed to the tile early. Because the retriever is used by a single thread, an abandoned (timed-out) decode never races with `release()`. The actual decoding runs in Android's media server process, so a corrupt file can't crash the app.
+- **APNG** (`ApngAnim`, todo §10.10): the platform shows only an APNG's first frame, so the chunks are read here. Every PNG tile reads its first 4 KB once: an `acTL` before the image data marks an APNG (a still PNG costs nothing more and nothing is cached for it). A scan then finds each `fcTL` with its `IDAT` / `fdAT` chunks without decoding (cached in SQLite like GIFs); each needed frame becomes a standalone PNG (`IHDR` with the frame's size, `PLTE` / `tRNS` / `gAMA` / `cHRM` / `sRGB` / `iCCP` / `sBIT` copied, `fdAT` → `IDAT` without its sequence number, new CRCs) for the platform decoder. `ApngAnim.render` decides the drawing order from the nearest key frame — blend *source* or *over*, dispose *none*, *background* or *previous* (a saved copy of the canvas) — and `Thumbnails` draws it on one full-size canvas. Badge `APNG`.
+- **MediaStore first frame** (Android 10+, todo §10.10): before a video's strip decodes, its id is looked up in MediaStore (one query per folder for the videos directly in it, cached for 32 folders) and `ContentResolver.loadThumbnail` gives the first frame — usually already made by the gallery — within 1.5 s or not at all. While the folder is still being listed and only first frames are wanted, that frame is all the tile gets: no video decoder runs. Files MediaStore doesn't know (`.nomedia` folders, storage it doesn't index) keep the decoder's frame.
 - **Animated WebP** (`WebpAnim`, todo §10.2): `AnimatedImageDrawable` can't seek, so the RIFF container is read directly. A chunk scan reads the canvas size and each `ANMF` frame's rectangle, duration, blend and dispose flags and data offset without decoding (cached in SQLite like GIFs; a still WebP is cached as 1 frame and keeps the image path). The first frame comes from the still decoder at once. For the strip, each needed frame is rewrapped as a standalone WebP (`VP8X` + `ALPH` + `VP8 `, or `VP8L`) for `BitmapFactory` and drawn on one full-size canvas (`SRC_OVER` or `SRC`, then clear on dispose). Decoding starts at the nearest key frame (libwebp's rule), so long animations skip most frames. Checked against libwebp through Pillow: identical composited frames for lossless, lossy and lossy + alpha files. WebP tiles take the GIF/video strip path (scrub, auto-preview, live play when selected, `WEBP` badge).
 - **GIFs** use a pure-Kotlin codec (`GifCodec`). Its output matches Pillow exactly on the reference folder, in frame count, duration and composited pixels.
   - *Block scan:* walks the block structure, skipping LZW data by length. It reads frame count, total duration and size without decoding, in ~3 ms for a 16 MB GIF. Results are cached in SQLite.
@@ -424,7 +471,7 @@ Each file gets a pseudo-random key, `hash(seed, file name)`. The random order is
 | Desktop detection                                             | `Configuration.semDesktopModeEnabled == SEM_DESKTOP_MODE_ENABLED` (read by reflection) for DeX, `FEATURE_PC` for Chromebooks; read again on every configuration change                                                                                                                                                                           |
 | Windowed slideshow                                            | API 30+: current window bounds ≠ maximum window bounds; below: `isInMultiWindowMode`                                                                                                                                                                                                                                                             |
 | Drag out and clipboard                                        | `View.startDragAndDrop` with `DRAG_FLAG_GLOBAL` and `DRAG_FLAG_GLOBAL_URI_READ` and `FileProvider` URIs; `Ctrl` + C puts the same URIs on the clipboard                                                                                                                                                                                          |
-| Drop in                                                       | `Modifier.dragAndDropTarget` on the folder grid; `requestDragAndDropPermissions` for the content URIs, released after the copy; `DropImport` copies streams (name from `OpenableColumns`, " (1)" on clashes, modification time kept); our own FileProvider URIs map back to paths and go through `FileOps`                                       |
+| Drop in                                                       | `Modifier.dragAndDropTarget` on the folder grid and on each folder tile (a drop there goes into that folder, the tile outlined while a drag is over it); `Ctrl` + V reads `content://` / `file://` URIs from the clipboard and copies them the same way; `requestDragAndDropPermissions` for the content URIs, released after the copy; `DropImport` copies streams (name from `OpenableColumns`, " (1)" on clashes, modification time kept); our own FileProvider URIs map back to paths and go through `FileOps`                                       |
 
 ### 3.10 Text previews
 
@@ -445,6 +492,8 @@ Tiles of text files show their first lines instead of an icon.
 
 ### 3.11 Opening files with other apps
 
+- **Audio files** play in the app (§3.12); *Open with…* in the context menu still offers other apps.
+- **Listening position:** a long video that has a listening position (§3.12, lectures) is opened at that position.
 - **Other files** open with a plain `ACTION_VIEW` (not a chooser), so the system's *Always* choice works. The MIME type comes from `FileTypes` (PDF, Office, EPUB, audio, archives, APK…), then `MimeTypeMap`. If no app handles that type, a chooser for `*/*` opens; if that fails too, a snackbar. **Open with…** in the context menu always shows the chooser.
 - **Long videos.** A tap on a video longer than the setting (default 3 min; 0 = off) opens the external player when one is installed; otherwise the slideshow. The duration comes from `MetaStore`; on the first tap in a new folder it is read with `MediaMetadataRetriever` under the watchdog, on IO. Tiles of such videos show ↗ bottom-left. `Shift` + Enter and the context menu's *Play in slideshow* keep them in the app; a long video reached inside a running slideshow plays there.
 - **Player lookup:** `queryIntentActivities(ACTION_VIEW, video/*)` on IO, again on every resume (manifest `PACKAGE_ADDED` receivers don't fire on Android 8+). Android 11+ needs the `<queries>` entry in the manifest.
@@ -454,14 +503,24 @@ Tiles of text files show their first lines instead of an icon.
 ### 3.12 Listening (books, albums, lectures)
 
 - **Service:** `PlaybackService`, a Media3 `MediaSessionService` (foreground type `mediaPlayback`), owns one ExoPlayer with the FFmpeg audio fallback. The video track is disabled with `TrackSelectionParameters.setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)`, so videos are decoded as audio only. Audio focus (`USAGE_MEDIA`, speech), `setHandleAudioBecomingNoisy` (pause on unplugged headphones) and `WAKE_MODE_LOCAL`. The system media notification provides lock-screen, Bluetooth, headset, watch and car controls.
-- **UI:** `BookPlayer` holds one `MediaController` for the Play button and the mini player; the mini player polls the position twice a second only while playing. Controllers send media items without their URI; the session rebuilds it from the media ID, which is the file path.
+- **UI:** `BookPlayer` holds one `MediaController` for the Play button, the mini player and the player screen; they poll the position twice a second only while playing. Controllers send media items without their URI; the session rebuilds it from the media ID, which is the file path.
 - **Folder kind** (`Book.classify`, pure Kotlin): computed on IO once the listing is complete. Lecture folders need every video's duration: from `MetaStore`, or `MediaMetadataRetriever` under the thumbnail watchdog; the first short video ends the check. Folders with more than 300 videos are not checked.
 - **Queue** (`BookFolder.queue`, on IO): playable files (audio + video) of the folder, in playlist order (`Playlist.parse`: comments, relative and absolute paths, `..`, Windows paths matched by file name, URLs skipped; `.m3u` decoded like text previews, `.m3u8` as UTF-8), then unlisted files in natural order.
-- **History** (`HistoryStore`, `history.db`, version 2): `audio_folder` (current file, position, speed, finished, last played; since v2 also the file number, queue length and file duration, for the folder tiles — read for all subfolders of a folder view in one prefix-range query) and `audio_file` (position, finished). Separate from `MetaStore`, which is a disposable cache; it is never pruned and migrates instead of dropping tables. Saved every 5 s while playing, and at once on pause, file change, seek, task removal and service stop; writes run on IO in the app scope. A file is finished within 2 % or 30 s of its end.
+- **History** (`HistoryStore`, `history.db`, version 3): `audio_folder` (current file, position, speed, finished, last played; since v2 also the file number, queue length and file duration, for the folder tiles — read for all subfolders of a folder view in one prefix-range query; `shuffle`, `seed` and, since v3, `first` and `repeat` for music mode, `lecture` (the override) and `cc`) and `audio_file` (position, finished). Separate from `MetaStore`, which is a disposable cache; it is never pruned and migrates instead of dropping tables. Saved every 5 s while playing, and at once on pause, file change, seek, task removal and service stop; writes run on IO in the app scope. A file is finished within 2 % or 30 s of its end.
 - **Smart rewind** (`Book.rewindMs`): 0 s after a pause under 1 min, 5 s under 1 h, 20 s after longer — on resume within the service and when a book is started again.
 - **Resumption:** `MediaSession.Callback.onPlaybackResumption` rebuilds the last book's queue on IO; `MediaButtonReceiver` in the manifest lets a headset Play start it.
 - **Idle:** paused for 30 min, or the book ended → the service stops and the notification goes. Swiping the app away while paused stops it too.
 - **Slideshow:** with sound on, its video player takes audio focus, so a playing book pauses.
+- **Player screen** (`PlayerScreen`): an overlay (`Overlay.PLAYER`) over the root or folder screen, so Back and the folder view under it stay as they were. It takes the key focus when it opens (the cover in keyboard mode), so keys never reach the grid below.
+- **Music mode** (`ShuffleOrder`, pure Kotlin): the queue sorted by `SlideOrder.key(seed, name)` with the file playing pinned first; `shuffle` + `seed` + `first` in `history.db` rebuild the same order after a restart, and files added meanwhile fall into place. Switching reorders the controller's items in place with `moveMediaItem` (no reload, no gap; over 400 files one `setMediaItems` instead). The service skips the smart rewind while `PlaybackService.musicMode` is set (the UI and the service share a process). Repeat (`Player.repeatMode`, music only) is kept in `audio_folder.repeat`.
+- **Skips** (`Skip.ms`): ExoPlayer's seek increments are fixed when it is built, so the session is given a `ForwardingPlayer` whose `seekBack` / `seekForward` and increments read the settings and the mode on every call; the app's buttons call `seekBack` / `seekForward` through the controller, so every surface skips the same. **Skip silence**: the service applies `ExoPlayer.setSkipSilenceEnabled` from the settings flow.
+- **Tile ▶ and *Continue listening*:** the collage scan counts audio files directly inside a folder (`Thumb.Folder.audioCount`, no extra read); books with history show ▶ too. Lecture folders without history get none (their kind needs every video's duration). *Continue listening* reads `recentFolders`, keeps books whose current file still exists, and loads small covers (`TrackExtrasLoader.cover`, ≈ 150 px) on IO; it is read again when a book starts, stops or changes file. *Start over?* is asked by `AppViewModel.playBook` for every entry point except the headset's resumption, which still starts a finished book over.
+- **Chapters, lyrics, title and cover** (`TrackExtrasLoader`, on IO, each step under an 8 s watchdog; the last 4 files cached): `MediaTags` reads chapters and lyrics without a decoder — MP4 boxes (`moov/trak/tref/chap` → the text track's `stts` / `stsc` / `stsz` / `stco` / `co64` → samples; else `moov/udta/chpl`; `moov/udta/meta/ilst/©lyr`), ID3v2.3 / 2.4 frames (`CHAP` with its `TIT2`, `SYLT` — returned as LRC, so it highlights like an `.lrc` — and `USLT`; unsynchronisation, extended headers, iTunes' plain v2.4 sizes), FLAC and Ogg Vorbis / Opus comments (`LYRICS`, `UNSYNCEDLYRICS`, `CHAPTERxxx` / `CHAPTERxxxNAME`; the Ogg comment packet is put together from the first stream's page segments), EBML (`Segment` → `Chapters`, directly or through the `SeekHead` past the clusters; the default visible edition, hidden and disabled atoms skipped). Every length is checked against the file size and an 8 MB cap before anything is allocated. Cue sheets and `.lrc` / `.srt` / `.vtt` are decoded like text previews. The title and the embedded picture come from `MediaMetadataRetriever`; covers are decoded at ≤ 1024 px.
+- **Lectures** (`audio_folder.lecture`): the override is read before `Book.classify`; *Listen as audio* skips the duration check. **Shared position:** `SlideshowController` loads the folder's `audio_file` rows when it opens; a video with one starts there, and leaving it (next / previous, Back, the menu, closing) updates the row — only rows that exist, so the slideshow never adds files to the history. `BrowserState.openVideo` passes the row's position to `ExternalApps.open`.
+- **Covers for videos:** `TrackExtrasLoader` tries the embedded picture, the image named like the file, then `getScaledFrameAtTime` at 10 % (closest key frame), then the folder's cover image. The notification still has no artwork (it would need the session's metadata to change while playing).
+- **Embedded subtitles** (`MediaTags.subtitles`): Matroska — `Tracks` gives the text track (type 17; `S_TEXT/UTF8`, `ASS`, `SSA`, `WEBVTT`), then every `Cluster`'s `SimpleBlock` / `BlockGroup` of that track (other tracks' blocks are skipped unread, through a 64 KB read window in `FileSource`); ASS dialogue text is the 9th field, override tags removed. MP4 — a `tx3g` sample entry under a `sbtl` / `subt` / `text` handler that isn't the chapter track; samples as for chapters. Used after companion files and embedded lyrics.
+- **Moved books** (`BookMatch`, pure Kotlin; `HistoryStore.orphans` / `moveBook`): rows with a current file whose folder is gone, on storage that is present; the recorded files (the ones played) must be in the new folder — the current one, and 80 % of the rest — and with only one recorded file the folder name must be the same. One match moves `audio_folder` and `audio_file` paths in one transaction; two or more move nothing.
+- **Sleep timer** (`BookPlayer`): a watcher checks the time left once a second, four times a second in the last 10 s, where it sets the controller's volume (`SleepTimer.volume`, a squared ramp); at zero it pauses and puts the volume back. *End of file / chapter* counts the time left at the playback speed, and also pauses on the automatic move to the next file. The accelerometer is listened to only while the sound fades.
 
 ### 3.13 Text editor
 
@@ -486,6 +545,27 @@ Spec and open work: [todo §9](todo.md#9-mtp-devices-cameras-and-phones-over-usb
 
 ---
 
+### 3.15 Previews of documents, books, audio and apps
+
+Tiles of other files show a picture when the file has one (todo §1.0), with a badge; the icon stays otherwise. Everything runs in the thumbnail scheduler under the 5 s watchdog, decoded at the tile size and cached like other thumbnails.
+
+| Files | Picture | Badge |
+| --- | --- | --- |
+| PDF | page 1 (`PdfRenderer`) on white, filling the tile's width from the top | `12 p.` |
+| Audio | the picture inside the file, else the folder's cover image (`cover` / `folder` / `front`…, listed once per folder) | duration |
+| EPUB | the OPF's `cover-image` item, the item `<meta name="cover">` points at, an image named *cover*, else the first image | `EPUB` |
+| FB2, FB2.ZIP | the `coverpage` image (base64 inside the book) | `FB2` |
+| CBZ | the first image in natural order | `CBZ` |
+| ODT / ODS / ODP | `Thumbnails/thumbnail.png` | the format |
+| DOCX / XLSX / PPTX | `docProps/thumbnail.*` when the app saved one; a DOCX without one shows its paragraphs as a text preview | the format |
+| APK | the app's icon (`getPackageArchiveInfo`, with the archive as its source) | the app's name |
+| SVG, SVGZ | the drawing scaled into the tile (AndroidSVG 1.4; no external resources are fetched; files over 8 MB keep the icon) | `SVG` |
+| CSV / TSV | the first lines as an aligned table (`CsvPreview`: tab, `;`, `,` or `|` sniffed, quotes kept, cells cut at 18 characters) | `CSV` |
+
+- **Reading ZIPs** (`ZipIndex`, pure Kotlin): the central directory from the end record, then one entry, stored or deflated (`Inflater`). Every size is checked against the file and a cap (24 MB per entry, 16 MB of directory) before anything is allocated; ZIP64 and encrypted entries are left out. `DocCovers` finds the cover entry and the DOCX text with small tag and attribute matching, no XML parser. FB2 is read as Latin-1: its tags and base64 are ASCII whatever the book's encoding.
+- **Kinds:** `svg svgz` are drawings (`VECTOR`); `epub fb2 cbz cbr mobi azw3 djvu` (and `.fb2.zip`) are books, with a book icon; `xls xlsx ods ppt pptx odp odg` are documents. CBR, MOBI, AZW3 and DjVu keep the icon.
+- **Folders without media:** when the collage scan finds no images or videos, it takes these instead — books, PDFs, documents, the first audio file (an album's files share one picture), then text and code, which go into the collage as dark ink on a light page. The item count shows when there is nothing, or nothing could be drawn.
+
 ## 4. Building and checking
 
 ### Build
@@ -501,13 +581,17 @@ Requirements: JDK 17+ and an Android SDK with platform 35 or 36 (on the dev mach
 
 The script checks Java, the SDK and the Gradle wrapper first, and prints fix commands if something is missing.
 
+### Checking without the Android SDK
+
+`tools/pure-tests.sh` runs the pure-Kotlin tests and `tools/typecheck/run.sh` type-checks the whole app, both without Gradle or the SDK (docs/RESEARCH_2026-10.md §0). They download `kotlinc` and their jars on the first run, outside the repo.
+
 ### Unit tests
 
 ```bash
 ./gradlew :app:testDebugUnitTest
 ```
 
-The tests cover smart crop (the examples above), slideshow timing (the table above), natural sort and folder order, the random order (no repeats, restore after restart, adds and deletes), file-type detection and the GIF codec on synthetic files. `EditorTest` covers the syntax colouring of every family, span shifting and undo; `TextFileTest` covers charset, BOM and CRLF round trips, *Save as UTF-8*, changed-on-disk detection, names and drafts.
+The tests cover smart crop (the examples above), slideshow timing (the table above), natural sort and folder order, the random order (no repeats, restore after restart, adds and deletes), file-type detection and the GIF codec on synthetic files. `EditorTest` covers the syntax colouring of every family, span shifting and undo; `TextFileTest` covers charset, BOM and CRLF round trips, *Save as UTF-8*, changed-on-disk detection, names and drafts. `PlayerTest` covers lyrics (LRC, SRT, VTT), companion files and covers, chapters and cue sheets, the shuffle order, speed steps and the sleep fade; `MediaTagsTest` reads chapters and lyrics from MP3, M4B and Matroska files built in memory, including broken ones.
 
 ### Checking a real media folder
 
@@ -595,7 +679,7 @@ GIF decode speed on the dev machine (desktop JVM, files from page cache): block 
 ## 6. Limitations and open questions
 
 **Not implemented**
-- **Animated AVIF strips.** Android offers no way to seek inside these animations (`AnimatedImageDrawable` only plays), so tiles show the first frame; animated WebP has its own reader now (§3.4), AVIF would need the AV1 decoder through `MediaCodec` (docs/RESEARCH_2026-10.md §2). The slideshow animates both, for R seconds, looped.
+- **Animated AVIF strips.** Android offers no way to seek inside these animations (`AnimatedImageDrawable` only plays), so tiles show the first frame; animated WebP and APNG have their own readers now (§3.4), AVIF would need the AV1 decoder through `MediaCodec` (docs/RESEARCH_2026-10.md §2). The slideshow animates both, for R seconds, looped.
 - **APNG** is shown as a still everywhere: the platform decoders only read its first frame.
 - **FFmpeg video decoding.** The bundled FFmpeg extension decodes *audio*; its video renderer is still experimental in Media3, so video codecs depend on the device's decoders. Rare AVI video codecs (MJPEG, old DivX on some devices) may not play, and their thumbnails show the broken-file icon. Everything in the reference folder is H.264 + AAC.
 - **MTP devices (§3.14)** are read-only and untested on a device: delete, copy to the device, live updates, streaming without the mirror and folder collages are open (todo §9.8). Android's Files app may hold a device so that this app can't open it (**verify**).
@@ -603,23 +687,28 @@ GIF decode speed on the dev machine (desktop JVM, files from page cache): block 
 - **Generated Baseline Profile.** The bundled profile is a broad hand-written rule for the app's own code; a profile recorded with Macrobenchmark on a device would be more precise.
 - **Text previews and opening with other apps (§3.10, §3.11)** are untested on a device: the external players' `"position"` extras, the Cyrillic charset check on real files, and the text rendering need a check.
 - **The text editor (§3.13)** is untested on a device: typing speed in a 1 MB file and colouring speed near the 200 K limit on a low-end phone, the on-screen keyboard over the text, pinch next to text selection, `Tab` and `Esc` with DeX keyboards, and the safe save (rename over the file) on SD cards and USB drives (FAT / exFAT through FUSE).
+- **The player screen, music mode, chapters, lyrics and the sleep fade (§3.12)** are untested on a device: the layout at 360 dp and in DeX, the blurred cover (Android 12+), the list handle, D-pad focus order on a TV, the controller's volume during the fade (**verify** the session allows `COMMAND_SET_VOLUME`), shake detection while the screen is off (the accelerometer may be batched or stopped by some phones), gapless moves when shuffle reorders a playing queue, and chapters from real M4B files made by different tools. Also the folder tile's ▶ inside the tile's own gestures, the notification's skip buttons with the `ForwardingPlayer` (Media3 may draw fixed ±10 s icons), skip silence with speech, and the battery hint's settings screen on each maker. Lectures: the slideshow starting at the listening position, VLC / MX Player starting there, frame covers from 4K / HEVC files, subtitle tracks of long MKV files (the cluster walk reads every block header: **verify** its time on a slow SD card under the 8 s watchdog), the ⋮ choice in the folder bar at 360 dp.
 - **Listening (§3.12)** is untested on a device: background playback with the screen off, Samsung / Xiaomi battery savers, video files played as audio (battery use), headset Play after the app was killed, and the system media controls offering the last book after a reboot (`onPlaybackResumption` without a `MediaLibraryService` may not be enough for that).
+- **Previews of documents, books, audio and apps (§3.15)** are untested on a device: `PdfRenderer` with large or damaged PDFs (a native crash would take the app down: if tombstones show up, decode in a separate process, todo §5), APK icons of split APKs (`.apks` / `.xapk` are ZIPs of APKs: they keep the icon), album art in large folders while scrolling, and the text-page collages.
+- **APNG strips, SVG tiles and MediaStore first frames (§3.4, §3.15)** are untested on a device: APNGs from different encoders (apngasm, ffmpeg, browsers' exports), `loadThumbnail` timing on a cold MediaStore (1.5 s limit), SVGs with text and filters (AndroidSVG draws a subset of SVG 1.1), and R8 with AndroidSVG in the release build.
 - **Lint:** 18 older errors remain (Media3 `@UnstableApi` opt-ins in the slideshow and tile playback, `dispatchKeyEvent` in `MainActivity`); the release build doesn't run lint.
 - **Legacy charsets other than Cyrillic** (Greek, Central European…) are not detected: they use the *Text files without encoding* setting. juniversalchardet (~200 KB) would add detection if needed.
 - **On-device tests.** No emulator or device was available, so the Android-only paths (still and video thumbnails, playback, the UI) are untested on a device. This includes everything in §3.9: the DeX launch size, the right-click guard and the caption-bar inset need a check on a DeX device.
-- **Dropping into the app** is untested on a device: which apps grant read access to their dropped URIs, and whether a dragged folder arrives as a tree URI that can be listed (otherwise folders are refused with a message). Drops onto a folder tile, moves and `Ctrl` + V paste are open (docs/RESEARCH_2026-10.md §5).
+- **Dropping into the app** is untested on a device: which apps grant read access to their dropped URIs, and whether a dragged folder arrives as a tree URI that can be listed (otherwise folders are refused with a message). Drops onto a folder tile and `Ctrl` + V are new and untested too: whether the grid's own target lets the tile's take the drop (Compose gives it to the innermost target under the pointer **verify**), and whether pasted `content://` URIs of other apps can be read (the clipboard grants read access to the app that reads it **verify**). Moves (with `Shift`) are open.
 
 **Decisions taken** (formerly open questions)
 - Mouse, gallery clicks (phones, tablets, TV): a click waits for a possible second click (~300 ms) and then opens; double-click and right-click select. Desktop clicks (auto in DeX and on Chromebooks): click focuses, double-click opens, right-click opens a context menu. Touch: tap opens at once; long press and two-finger tap select.
 - Thumbnail size: automatic from the window width until the user changes it. Settings saved before this existed have no "automatic" flag, so they start automatic once.
 - FFmpeg is in the base APK, so users never have to install anything (+~6 MB for 4 ABIs; release APK ~8.3 MB).
 - No Play Store build for now, so no SAF fallback: the app uses "All files access".
+- SVG tiles use AndroidSVG (`com.caverock:androidsvg-aar` 1.4, Apache 2.0, ~220 KB of classes); SVGs still open with other apps.
 - Text previews: 10 sp at least, growing with the system font size up to 13 sp; whole lines only; code, logs and tables in monospace (§3.10).
 - Code font: **JetBrains Mono** is bundled (SIL Open Font License 1.1, licence in `assets/licenses/`), in its no-ligature edition (*JetBrains Mono NL*: code reads character by character), regular, bold and italic, subset to Latin, Cyrillic, Greek, punctuation, arrows and box drawing, without hinting: ~250 KB, ~130 KB compressed in the APK. Chosen over Fira Code, Source Code Pro and Cascadia Code for its clear `0/O`, `1/l/I`, tall x-height at small sizes and full Cyrillic; Google's downloadable fonts were not used because they need Play services. *Settings → Editor → JetBrains Mono for code* switches back to the system font. The crash screen keeps the system font (it must work whatever failed).
 - Legacy charsets: a charset the file declares, then the Cyrillic check, then the *Text files without encoding* setting (§3.10).
 - Long videos (default > 3 min) open in an external player when one is installed, otherwise in the slideshow (§3.11).
 - Other apps are opened only from the folder view: never from the slideshow, never in selection mode (§3.11).
 - Every audio folder plays in book mode; folders with audio and videos play both as one queue (§2, Listening).
+- Shuffle is kept per folder and turns it into music mode (its own skip length, no resume rewind, no book bar); repeat exists only there. A tap on an audio file plays its folder in the app, starting at that file (§2, Listening).
 - Play order: the folder's `.m3u` / `.m3u8` playlist, otherwise natural file-name order (§3.12).
 - Lecture folders: only long videos; a tap on a video still watches it; listening starts from the Play button and never shows the picture (§3.12).
 - Text editor: a tap on a text file opens the editor (a setting switches back to other apps). New text file and New folder are in the top bar on wide screens; on phones they share a ⋮ menu with the favourite star and settings. Limits: editable up to 1 MB, read-only up to 10 MB, colours up to 200 K characters (§3.13).
