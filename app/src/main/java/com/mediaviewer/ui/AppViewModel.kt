@@ -670,28 +670,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun transfer(entries: List<FileEntry>, destDir: String, move: Boolean) {
         if (entries.isEmpty()) return
         if (entries.any { MtpPaths.isMtp(it.path) }) return importFromDevice(entries, destDir)
-        val verb = if (move) "Moving" else "Copying"
         val listing = _listing.value
-        var job: Job? = null
-        setBusy("$verb…", onStop = { job?.cancel() }) {
-            val id = _busy.value?.id ?: 0L
-            job = viewModelScope.launch(Dispatchers.IO) {
-                val r = FileOps.transfer(entries.map { it.path }, destDir, move) { i, n, name ->
-                    viewModelScope.launch { updateBusy(id, "$verb ${i + 1} / $n: $name", i.toFloat() / n) }
-                }
-                withContext(Dispatchers.Main) {
-                    if (move) entries.forEach { e -> if (!File(e.path).exists()) listing?.remove(e.path) }
-                    val name = destDir.substringAfterLast('/')
-                    if (r.failed.isEmpty()) {
-                        errors.notify("${if (move) "Moved" else "Copied"} ${r.done} to $name", log = false)
-                    } else {
-                        r.failed.forEach { (p, why) -> errors.readError(p, why) }
-                        errors.notify("${r.failed.size} of ${entries.size} couldn't be ${if (move) "moved" else "copied"}: ${r.failed[0].second}", r.failed[0].first)
-                    }
-                }
-            }
-            job?.join()
-        }
+        copyWithSummary(destDir, entries.size, move, after = {
+            if (move) entries.forEach { e -> if (!File(e.path).exists()) listing?.remove(e.path) }
+        }) { progress -> FileOps.transfer(entries.map { it.path }, destDir, move, progress) }
     }
 
     /**
@@ -700,26 +682,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun importDropped(uris: List<Uri>, destDir: String, release: () -> Unit) {
         if (uris.isEmpty()) return release()
+        copyWithSummary(destDir, uris.size, move = false, quietIfNothing = true, after = release) { progress ->
+            DropImport.copyIn(getApplication(), uris, destDir, progress)
+        }
+    }
+
+    /**
+     * Runs a move or copy on IO behind the wait indicator with Stop and `n / total: name` progress,
+     * then one snackbar: done, or the failures (each also in the error log). [after] runs on the
+     * main thread at the end, also after Stop or a crash of [work].
+     */
+    private fun copyWithSummary(
+        destDir: String,
+        total: Int,
+        move: Boolean,
+        quietIfNothing: Boolean = false,
+        after: () -> Unit = {},
+        work: suspend (onProgress: (index: Int, total: Int, name: String) -> Unit) -> FileOps.Result,
+    ) {
+        val verb = if (move) "Moving" else "Copying"
         var job: Job? = null
-        setBusy("Copying…", onStop = { job?.cancel() }) {
+        setBusy("$verb…", onStop = { job?.cancel() }) {
             val id = _busy.value?.id ?: 0L
             job = viewModelScope.launch(Dispatchers.IO) {
                 try {
-                    val r = DropImport.copyIn(getApplication(), uris, destDir) { i, n, name ->
-                        viewModelScope.launch { updateBusy(id, "Copying ${i + 1} / $n: $name", i.toFloat() / n) }
-                    }
+                    val r = work { i, n, name -> viewModelScope.launch { updateBusy(id, "$verb ${i + 1} / $n: $name", i.toFloat() / n) } }
                     withContext(Dispatchers.Main) {
                         val name = destDir.substringAfterLast('/')
                         when {
-                            r.failed.isEmpty() -> if (r.done > 0) errors.notify("Copied ${r.done} to $name", log = false)
+                            r.failed.isEmpty() -> if (r.done > 0 || !quietIfNothing) errors.notify("${if (move) "Moved" else "Copied"} ${r.done} to $name", log = false)
                             else -> {
                                 r.failed.forEach { (p, why) -> errors.readError(p, why) }
-                                errors.notify("${r.failed.size} of ${uris.size} couldn't be copied: ${r.failed[0].second}", r.failed[0].first)
+                                errors.notify("${r.failed.size} of $total couldn't be ${if (move) "moved" else "copied"}: ${r.failed[0].second}", r.failed[0].first)
                             }
                         }
                     }
                 } finally {
-                    withContext(NonCancellable + Dispatchers.Main) { release() }
+                    withContext(NonCancellable + Dispatchers.Main) { after() }
                 }
             }
             job?.join()

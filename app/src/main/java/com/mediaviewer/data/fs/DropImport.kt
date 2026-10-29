@@ -50,15 +50,25 @@ object DropImport {
             coroutineContext.ensureActive()
             val path = localPath(uri, own)
             if (path != null) {
-                // Dropped back where it came from: nothing to do, and no error either.
-                if (File(path).parentFile?.canonicalPath != dest.canonicalPath) local.add(path)
+                when {
+                    // Only shared storage: a crafted drop must not make us copy our own private files out.
+                    !isShared(context, path) -> failed.add(path to "not a shared file")
+                    // Dropped back where it came from: nothing to do, and no error either.
+                    File(path).parentFile?.canonicalPath != dest.canonicalPath -> local.add(path)
+                }
                 continue
             }
             val name = displayName(resolver, uri)
             onProgress(i, uris.size, name)
             try {
                 if (resolver.getType(uri) == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    copyTree(resolver, uri, FileOps.freeName(dest, name))
+                    val target = FileOps.freeName(dest, name)
+                    try {
+                        copyTree(resolver, uri, target)
+                    } catch (e: Throwable) {
+                        target.deleteRecursively() // no half-copied folder left behind
+                        throw e
+                    }
                 } else {
                     copyStream(resolver, uri, FileOps.freeName(dest, name), lastModified(resolver, uri))
                 }
@@ -76,6 +86,18 @@ object DropImport {
             failed.addAll(r.failed)
         }
         return FileOps.Result(done, failed)
+    }
+
+    /** Not inside app-private storage (ours or another app's): `/data/…`, or our folders under `Android/`. */
+    private fun isShared(context: Context, path: String): Boolean {
+        val c = try {
+            File(path).canonicalPath
+        } catch (e: java.io.IOException) {
+            return false
+        }
+        if (c.startsWith("/data/")) return false
+        val own = (context.getExternalFilesDirs(null) + context.externalCacheDirs).mapNotNull { it?.parentFile?.canonicalPath }
+        return own.none { c == it || c.startsWith("$it/") }
     }
 
     private fun displayName(resolver: ContentResolver, uri: Uri): String {
@@ -96,24 +118,9 @@ object DropImport {
     }
 
     private suspend fun copyStream(resolver: ContentResolver, uri: Uri, target: File, mtime: Long) {
-        try {
-            val input = resolver.openInputStream(uri) ?: throw FileNotFoundException("can't open")
-            input.use { inp ->
-                target.outputStream().use { out ->
-                    val buf = ByteArray(1 shl 20)
-                    while (true) {
-                        coroutineContext.ensureActive()
-                        val n = inp.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                    }
-                }
-            }
-            if (mtime > 0) target.setLastModified(mtime)
-        } catch (e: Throwable) {
-            target.delete()
-            throw e
-        }
+        val input = resolver.openInputStream(uri) ?: throw FileNotFoundException("can't open")
+        input.use { FileOps.copyStream(it, target) }
+        if (mtime > 0) target.setLastModified(mtime)
     }
 
     /** A dropped folder (a document URI): its children through the provider (**verify** that drags grant this). */
