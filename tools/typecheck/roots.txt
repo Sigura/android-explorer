@@ -1,0 +1,20 @@
+# group artifact version  (resolved transitively from Maven Central by resolve.py)
+org.jetbrains.compose.runtime runtime-desktop 1.8.0
+org.jetbrains.compose.runtime runtime-saveable-desktop 1.8.0
+org.jetbrains.compose.ui ui-desktop 1.8.0
+org.jetbrains.compose.foundation foundation-desktop 1.8.0
+org.jetbrains.compose.animation animation-desktop 1.8.0
+org.jetbrains.compose.material3 material3-desktop 1.8.0
+org.jetbrains.compose.material material-icons-extended-desktop 1.7.3
+org.jetbrains.androidx.lifecycle lifecycle-viewmodel-compose-desktop 2.8.4
+org.jetbrains.androidx.lifecycle lifecycle-runtime-compose-desktop 2.8.4
+org.jetbrains.kotlinx kotlinx-coroutines-core-jvm 1.10.1
+io.coil-kt.coil3 coil-compose-android 3.1.0
+io.coil-kt.coil3 coil-gif 3.1.0
+com.google.guava guava 33.3.1-android
+org.json json 20240303
+# JetBrains-published forks of Google-only androidx.collection / androidx.annotation (same packages)
+org.jetbrains.compose.collection-internal collection-desktop 1.6.0-beta02
+org.jetbrains.compose.annotation-internal annotation-desktop 1.8.0-alpha01
+org.robolectric android-all 16-robolectric-13921718
+com.caverock androidsvg-aar 1.4
