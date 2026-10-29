@@ -47,4 +47,14 @@ class TextSearchTest {
         assertEquals(2, TextSearch.lineOf(ls, 6))
         assertEquals(3, TextSearch.lineOf(ls, 8))
     }
+
+    @Test fun replaceAll() {
+        val t = "Foo bar foo FOO"
+        val m = TextSearch.find(t, "foo", matchCase = false)
+        assertEquals("baz bar baz baz" to 15, TextSearch.replaceAll(t, m, 3, "baz"))
+        assertEquals("x bar x x" to 9, TextSearch.replaceAll(t, m, 3, "x"))
+        assertEquals(" bar  " to 6, TextSearch.replaceAll(t, m, 3, ""))
+        assertEquals("aXbXc" to 4, TextSearch.replaceAll("a--b--c", TextSearch.find("a--b--c", "--", true), 2, "X"))
+        assertEquals("same" to 0, TextSearch.replaceAll("same", IntArray(0), 1, "z"))
+    }
 }

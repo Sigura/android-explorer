@@ -203,6 +203,14 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
                         }
                         true
                     }
+                    ev.isCtrlPressed && ev.key == Key.H -> {
+                        state.openReplace()
+                        try {
+                            findFocus.requestFocus()
+                        } catch (e: IllegalStateException) {
+                        }
+                        true
+                    }
                     ev.key == Key.F3 || (ev.isCtrlPressed && ev.key == Key.G) -> state.findNext(forward = !ev.isShiftPressed).let { true }
                     ev.key == Key.F2 && busy == null && !state.doc.readOnly -> {
                         state.renaming = true
@@ -298,10 +306,11 @@ private fun EditText(state: EditorState, sp: Int, wrap: Boolean, code: FontFamil
 @Composable
 private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily) {
     val style = textStyle(state, sp, code)
-    val lines by produceState<List<String>>(emptyList(), state.doc) {
-        value = withContext(Dispatchers.Default) { state.doc.text.split('\n') }
+    // Lines and where each starts (for find), both off the main thread: up to 10 MB.
+    val split by produceState(emptyList<String>() to IntArray(0), state.doc) {
+        value = withContext(Dispatchers.Default) { state.doc.text.split('\n') to TextSearch.lineStarts(state.doc.text) }
     }
-    val starts = remember(lines) { TextSearch.lineStarts(state.doc.text) }
+    val (lines, starts) = split
     val list = rememberLazyListState()
     // Find: the list scrolls to the current match's line, a few lines below the top.
     LaunchedEffect(state.jumps) {
