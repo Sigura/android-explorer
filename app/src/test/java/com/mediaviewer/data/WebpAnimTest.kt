@@ -74,6 +74,8 @@ class WebpAnimTest {
 
     @Test fun stillsAreNotAnimated() {
         assertNull(WebpAnim.scan(file(10, 10, emptyList(), animated = false)))
+        // Animated flag, but no complete frame (a cut-off download): treated as a still.
+        assertNull(WebpAnim.scan(file(10, 10, emptyList(), animated = true)))
         assertFalse(WebpAnim.isAnimated("RIFF\u0000\u0000\u0000\u0000WEBPVP8 ".toByteArray()))
     }
 

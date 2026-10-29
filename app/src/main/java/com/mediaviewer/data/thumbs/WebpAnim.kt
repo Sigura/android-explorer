@@ -1,7 +1,6 @@
 package com.mediaviewer.data.thumbs
 
 import java.io.File
-import java.io.IOException
 import java.io.RandomAccessFile
 
 /** One `ANMF` frame of an animated WebP (todo §10.2). Offsets are in canvas pixels. */
@@ -40,7 +39,10 @@ object WebpAnim {
         head.size >= 21 && fourcc(head, 0) == "RIFF" && fourcc(head, 8) == "WEBP" && fourcc(head, 12) == "VP8X" &&
             (head[20].toInt() and 0x02) != 0
 
-    /** The frames of an animated WebP; null when the file is a still WebP (or not a WebP at all). */
+    /**
+     * The frames of an animated WebP; null when the file is a still WebP, not a WebP at all, or an
+     * animation without one complete frame (a truncated download): the still decoder shows what it can.
+     */
     fun scan(file: File): WebpInfo? = RandomAccessFile(file, "r").use { scan(it) }
 
     fun scan(f: RandomAccessFile): WebpInfo? {
@@ -87,8 +89,7 @@ object WebpAnim {
             }
             pos = body + size + (size and 1) // chunks are padded to an even size
         }
-        if (frames.isEmpty()) throw IOException("animated WebP without frames")
-        return WebpInfo(canvasW, canvasH, frames)
+        return if (frames.isEmpty()) null else WebpInfo(canvasW, canvasH, frames)
     }
 
     /** `ALPH` before the bitstream, or a lossless bitstream with its alpha bit set. */
