@@ -3,6 +3,7 @@ package com.mediaviewer.data.fs
 import android.util.Log
 import kotlinx.coroutines.ensureActive
 import java.io.File
+import java.io.InputStream
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -71,19 +72,22 @@ object FileOps {
             for (child in src.listFiles() ?: emptyArray()) copyRecursively(child, File(target, child.name))
             return
         }
+        src.inputStream().use { copyStream(it, target) }
+        target.setLastModified(src.lastModified())
+    }
+
+    /** Writes [input] to [target] in 1 MB chunks, checking for Stop between them; a partial file is removed. */
+    suspend fun copyStream(input: InputStream, target: File) {
         try {
-            src.inputStream().use { input ->
-                target.outputStream().use { out ->
-                    val buf = ByteArray(1 shl 20)
-                    while (true) {
-                        coroutineContext.ensureActive()
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                    }
+            target.outputStream().use { out ->
+                val buf = ByteArray(1 shl 20)
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
                 }
             }
-            target.setLastModified(src.lastModified())
         } catch (e: Throwable) {
             target.delete()
             throw e
