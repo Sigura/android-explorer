@@ -1,5 +1,6 @@
 package com.mediaviewer.ui.browser
 
+import android.app.Activity
 import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
@@ -9,8 +10,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -81,6 +85,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -121,13 +126,18 @@ import androidx.compose.ui.unit.dp
 import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.fs.Volumes
+import com.mediaviewer.data.history.FolderHistory
 import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.domain.BookKind
+import com.mediaviewer.domain.ListenStatus
 import com.mediaviewer.domain.SortBy
 import com.mediaviewer.domain.SortSpec
 import com.mediaviewer.domain.model.FileEntry
+import com.mediaviewer.domain.model.MediaType
+import com.mediaviewer.playback.NowPlaying
 import com.mediaviewer.ui.AppViewModel
 import com.mediaviewer.ui.Overlay
+import com.mediaviewer.ui.common.CodeFonts
 import com.mediaviewer.ui.common.ExternalApps
 import com.mediaviewer.ui.common.StepSlider
 import com.mediaviewer.ui.common.stepIn
@@ -177,7 +187,7 @@ fun autoTileDp(width: Dp, tv: Boolean): Int {
 fun isTelevision(context: Context): Boolean =
     context.getSystemService(UiModeManager::class.java)?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
 
-@OptIn(FlowPreview::class)
+@OptIn(FlowPreview::class, ExperimentalFoundationApi::class)
 @Composable
 fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
     val settings by vm.settings.collectAsState()
@@ -190,6 +200,11 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
     val sort by vm.folderSort.collectAsState()
     val nowPlaying by vm.bookPlayer.state.collectAsState()
     val playingPath = nowPlaying?.path?.takeIf { nowPlaying?.folder == listing.path }
+    // Books among the subfolders (todo §10.1): read again when playback pauses, changes file or book.
+    val books by produceState(emptyMap<String, FolderHistory>(), listing.path, nowPlaying?.folder, nowPlaying?.index, nowPlaying?.playing) {
+        if (value.isNotEmpty()) delay(500) // let the player's save on pause / file change land first
+        value = vm.booksIn(listing.path)
+    }
     val folderSorts by vm.settingsStore.folderSorts.collectAsState()
     val ctx = LocalContext.current
     val density = LocalDensity.current
@@ -385,6 +400,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
         SideEffect {
             vm.thumbnails.textPx = textPx
             vm.thumbnails.textPadPx = textPadPx
+            vm.thumbnails.monoTypeface = CodeFonts.typeface(ctx, settings.codeFontBundled)
         }
         val cfg = TileConfig(
             sizePx, settings.cropMode, settings.cropThresholdPct, isTv, settings.showNames, desktopClicks(settings.mouseMode),
@@ -394,6 +410,11 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
         LaunchedEffect(columns, maxHeight) {
             val rows = (maxHeight / (cellW * 0.75f)).toInt() + 3
             vm.thumbnails.ensureCapacity(rows * columns)
+        }
+        // Drop files from other apps into this folder (todo §10.5); MTP folders are read-only.
+        var dropHover by remember { mutableStateOf(false) }
+        val drop = remember(listing.path) {
+            FileDrop(ctx as? Activity, onHover = { dropHover = it }) { uris, release -> vm.importDropped(uris, listing.path, release) }
         }
         CompositionLocalProvider(LocalTileConfig provides cfg) {
             LazyVerticalGrid(
@@ -407,7 +428,9 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                     .onGloballyPositioned { browser.gridOrigin = it.positionInRoot() }
                     .onFocusChanged { gridHasFocus = it.hasFocus }
                     .nestedScroll(hideOnScroll)
-                    .densityGestures(::zoom, onTwoFingerTap = browser::twoFingerTap),
+                    .densityGestures(::zoom, onTwoFingerTap = browser::twoFingerTap)
+                    .dragAndDropTarget(shouldStartDragAndDrop = { !remote && FileDrop.accepts(it) }, target = drop)
+                    .then(if (dropHover) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)) else Modifier),
             ) {
                 item(key = BACK_KEY, contentType = "back") {
                     BackTile(browser, requestFocus = focusTarget == BACK_KEY, modifier = Modifier.aspectRatio(4f / 3f))
@@ -415,6 +438,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                 items(entries, key = { it.path }, contentType = { it.type }) { e ->
                     EntryTile(
                         e, browser, gate, requestFocus = e.path == focusTarget, playing = e.path == playingPath,
+                        listen = if (e.type == MediaType.FOLDER) listenStatus(e.path, nowPlaying, books) else null,
                         modifier = Modifier.aspectRatio(4f / 3f),
                     )
                 }
@@ -856,4 +880,13 @@ private fun bubbleLabel(e: FileEntry, sortBy: SortBy): String = when (sortBy) {
     SortBy.DATE -> SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date(e.mtime))
     SortBy.SIZE -> formatSize(e.size)
     SortBy.TYPE -> File(e.name).extension.lowercase().ifEmpty { "—" }
+}
+
+/** The live player for the book playing, else its saved history; null = never listened to (todo §10.1). */
+private fun listenStatus(path: String, now: NowPlaying?, books: Map<String, FolderHistory>): ListenStatus? {
+    if (now != null && now.folder == path) {
+        return ListenStatus(now.index, now.count, now.positionMs, now.durationMs, finished = false, playing = now.playing)
+    }
+    val h = books[path] ?: return null
+    return ListenStatus(h.index, h.total, h.positionMs, h.durationMs, h.finished)
 }

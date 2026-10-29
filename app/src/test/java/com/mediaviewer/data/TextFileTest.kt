@@ -99,4 +99,22 @@ class TextFileTest {
         d.remove("/a")
         assertNull(d.get("/a"))
     }
+
+    @Test fun renameNeverOverwrites() {
+        val a = tmp.newFile("a.txt").apply { writeText("a") }
+        val b = tmp.newFile("b.txt").apply { writeText("b") }
+        assertEquals("b.txt already exists", TextFile.rename(a, "b.txt"))
+        assertEquals("b", b.readText())
+        assertNull(TextFile.rename(a, "c.md"))
+        assertEquals("a", File(tmp.root, "c.md").readText())
+        assertTrue(!a.exists())
+        assertNull(TextFile.rename(File(tmp.root, "c.md"), "c.md"))
+        assertEquals("gone.txt is gone", TextFile.rename(File(tmp.root, "gone.txt"), "x.txt"))
+    }
+
+    @Test fun renameChangingCaseOnly() {
+        val a = tmp.newFile("notes.txt").apply { writeText("n") }
+        assertNull(TextFile.rename(a, "Notes.txt"))
+        assertEquals(listOf("Notes.txt"), tmp.root.list()!!.toList())
+    }
 }

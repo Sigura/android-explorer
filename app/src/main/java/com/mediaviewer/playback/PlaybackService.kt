@@ -216,9 +216,17 @@ class PlaybackService : MediaSessionService() {
     private fun write(path: String, positionMs: Long, finished: Boolean) {
         val folder = File(path).parent ?: return
         val speed = player.playbackParameters.speed
+        // Where we are in the book, for the folder tiles (todo §10.1).
+        val total = player.mediaItemCount
+        val index = if (player.currentMediaItem?.mediaId == path) {
+            player.currentMediaItemIndex
+        } else {
+            (0 until total).firstOrNull { player.getMediaItemAt(it).mediaId == path } ?: -1
+        }
+        val duration = if (index == player.currentMediaItemIndex && player.duration != C.TIME_UNSET) player.duration else 0L
         // The app scope, so a save started in onDestroy still completes.
         app.appScope.launch(Dispatchers.IO) {
-            app.history.save(folder, path, File(path).length(), positionMs, finished, speed)
+            app.history.save(folder, path, File(path).length(), positionMs, finished, speed, index, total, duration)
         }
     }
 

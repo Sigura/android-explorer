@@ -143,6 +143,11 @@ fun SettingsScreen(vm: AppViewModel) {
             }
         }
         item { SwitchRow("Wrap lines", "Off: long lines scroll sideways", s.editorWrap) { v -> up { it.copy(editorWrap = v) } } }
+        item {
+            SwitchRow("JetBrains Mono for code", "Code, logs and tables in the editor and on tiles. Off: the system's monospaced font", s.codeFontBundled) { v ->
+                up { it.copy(codeFontBundled = v) }
+            }
+        }
 
         item { Header("Home screen") }
         item {

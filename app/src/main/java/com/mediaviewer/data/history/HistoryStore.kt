@@ -14,6 +14,11 @@ data class FolderHistory(
     val speed: Float,
     val finished: Boolean,
     val playedAt: Long,
+    /** The current file's place in the queue (0-based) and the queue length; -1 / 0 = not saved (v1 rows). */
+    val index: Int = -1,
+    val total: Int = 0,
+    /** The current file's duration; 0 = not known. */
+    val durationMs: Long = 0,
 )
 
 /** One file's saved position. */
@@ -29,7 +34,8 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
         db.execSQL(
             "CREATE TABLE audio_folder (path TEXT PRIMARY KEY, current TEXT, position INTEGER NOT NULL DEFAULT 0, " +
                 "speed REAL NOT NULL DEFAULT 1, shuffle INTEGER NOT NULL DEFAULT 0, seed INTEGER NOT NULL DEFAULT 0, " +
-                "finished INTEGER NOT NULL DEFAULT 0, played INTEGER NOT NULL DEFAULT 0)",
+                "finished INTEGER NOT NULL DEFAULT 0, played INTEGER NOT NULL DEFAULT 0, " +
+                "idx INTEGER NOT NULL DEFAULT -1, total INTEGER NOT NULL DEFAULT 0, duration INTEGER NOT NULL DEFAULT 0)",
         )
         db.execSQL(
             "CREATE TABLE audio_file (path TEXT PRIMARY KEY, size INTEGER NOT NULL DEFAULT 0, " +
@@ -40,11 +46,17 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // Migrations go here, one `if (oldVersion < n)` step per version. Never drop the tables.
+        if (oldVersion < 2) {
+            // Where we are in the book, for the folder tiles (todo §10.1).
+            db.execSQL("ALTER TABLE audio_folder ADD COLUMN idx INTEGER NOT NULL DEFAULT -1")
+            db.execSQL("ALTER TABLE audio_folder ADD COLUMN total INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE audio_folder ADD COLUMN duration INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     fun folder(path: String): FolderHistory? = query {
         readableDatabase.rawQuery(
-            "SELECT path, current, position, speed, finished, played FROM audio_folder WHERE path = ?",
+            "SELECT $FOLDER_COLUMNS FROM audio_folder WHERE path = ?",
             arrayOf(path),
         ).use { c -> if (c.moveToFirst()) readFolder(c) else null }
     }
@@ -52,12 +64,28 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
     /** The most recently played books, newest first (the root screen's "Continue listening"). */
     fun recentFolders(limit: Int): List<FolderHistory> = query {
         readableDatabase.rawQuery(
-            "SELECT path, current, position, speed, finished, played FROM audio_folder WHERE played > 0 ORDER BY played DESC LIMIT ?",
+            "SELECT $FOLDER_COLUMNS FROM audio_folder WHERE played > 0 ORDER BY played DESC LIMIT ?",
             arrayOf(limit.toString()),
         ).use { c ->
             buildList { while (c.moveToNext()) add(readFolder(c)) }
         }
     } ?: emptyList()
+
+    /** The books directly inside [parent], by path (one query for a folder view's tiles, todo §10.1). */
+    fun foldersIn(parent: String): Map<String, FolderHistory> = query {
+        val prefix = parent.trimEnd('/') + "/"
+        readableDatabase.rawQuery(
+            "SELECT $FOLDER_COLUMNS FROM audio_folder WHERE path >= ? AND path < ?",
+            arrayOf(prefix, prefix.dropLast(1) + "0"), // '0' sorts right after '/'
+        ).use { c ->
+            buildMap {
+                while (c.moveToNext()) {
+                    val h = readFolder(c)
+                    if (h.folder.indexOf('/', prefix.length) < 0) put(h.folder, h)
+                }
+            }
+        }
+    } ?: emptyMap()
 
     /** Saved positions of the files in [folder] (one query for the whole queue). */
     fun files(folder: String): Map<String, FileHistory> = query {
@@ -75,8 +103,14 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
         }
     } ?: emptyMap()
 
-    /** Saves the current file and position of its book, in one transaction. */
-    fun save(folder: String, path: String, size: Long, positionMs: Long, fileFinished: Boolean, speed: Float) {
+    /**
+     * Saves the current file and position of its book, in one transaction.
+     * @param index the file's place in the queue (0-based) of [total] files; [durationMs] its length (0 = unknown).
+     */
+    fun save(
+        folder: String, path: String, size: Long, positionMs: Long, fileFinished: Boolean, speed: Float,
+        index: Int = -1, total: Int = 0, durationMs: Long = 0,
+    ) {
         val now = System.currentTimeMillis()
         write { db ->
             db.insertWithOnConflict(
@@ -97,6 +131,9 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
                 put("speed", speed)
                 put("finished", 0)
                 put("played", now)
+                put("idx", index)
+                put("total", total)
+                put("duration", durationMs)
             }
             if (db.update("audio_folder", values, "path = ?", arrayOf(folder)) == 0) {
                 values.put("path", folder)
@@ -118,7 +155,10 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
     }
 
     private fun readFolder(c: android.database.Cursor) =
-        FolderHistory(c.getString(0), c.getString(1), c.getLong(2), c.getFloat(3), c.getInt(4) != 0, c.getLong(5))
+        FolderHistory(
+            c.getString(0), c.getString(1), c.getLong(2), c.getFloat(3), c.getInt(4) != 0, c.getLong(5),
+            index = c.getInt(6), total = c.getInt(7), durationMs = c.getLong(8),
+        )
 
     private inline fun <T> query(block: () -> T): T? = try {
         block()
@@ -143,7 +183,8 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
     }
 
     private companion object {
-        const val VERSION = 1
+        const val VERSION = 2
+        const val FOLDER_COLUMNS = "path, current, position, speed, finished, played, idx, total, duration"
         const val TAG = "MediaViewer"
     }
 }

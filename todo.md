@@ -8,6 +8,8 @@ Priority order: **3 → 4 → 1b**. Finished items move to the README; what is l
 
 **Done (2026-10-25, not yet tried on a device):** the text editor with new text files and folders (§6; README §3.13).
 
+**Done (2026-10-29, not yet tried on a device):** book status on folder tiles, animated WebP strips, dropping files into the app, find and rename in the editor (§10; README §2, §3.4, §3.9, §3.12). Research for video thumbnails, animated AVIF / APNG and the SAF fallback: docs/RESEARCH_2026-10.md.
+
 **Still open in §3 / §4:** shuffle and music mode (§3.1), the folder **tile** ▶ button and progress ring (§3.2), the battery-saver hint (§3.3), the per-file progress in the list, renamed-folder matching, the *Start over?* question (a finished book now simply starts over) and the *Continue listening* row (§3.4), the lecture override in ⋮, the shared position with the slideshow / external player, video frames as cover art and subtitles (§3.6), and the whole player screen (§4.1, §4.2, §4.4, §4.5).
 
 Contents
@@ -21,6 +23,7 @@ Contents
 7. [Linux desktop version](#7-linux-desktop-version) — separate app, spec in docs/LINUX_DESKTOP_SPEC.md
 8. [Sorting, mini player and long names](#8-sorting-mini-player-and-long-names)
 9. [MTP devices: cameras and phones over USB](#9-mtp-devices-cameras-and-phones-over-usb) — first step done, README §3.14
+10. [Listening tiles, animated WebP, video thumbnails, drop, find, SAF](#10-listening-tiles-animated-webp-video-thumbnails-drop-find-saf) — requested 2026-10-29
 
 ---
 
@@ -276,7 +279,7 @@ Done 2026-10-25, not yet tried on a device. Decisions are in README §6.
 
 Still open:
 
-- **Find** (`Ctrl` + F, with a search bar under the top bar) and **rename** by tapping the name in the editor bar.
+- **Replace** (find is done, §10.6).
 - **Read-only files** (1–10 MB) always wrap: the line list has no sideways scroll.
 - **Verify on a device:** typing speed in a 1 MB file (the text field lays out the whole text on each change), colouring speed near the 200 K limit, the keyboard over the text, pinch next to text selection, `Tab` / `Esc` on DeX keyboards, the safe save on FAT / exFAT through FUSE, and whether breadcrumbs fit at 360 dp with the phone ⋮ menu.
 
@@ -368,3 +371,81 @@ Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):
 9. **Tests:** `MtpPaths` is covered (`MtpPathsTest`). A fake `MtpConnection` would allow tests of the listing batches, the watchdog and the mirror budget.
 10. **verify** on devices: a Canon / Nikon / Sony camera in PTP mode, an Android phone in MTP mode (locked, then unlocked), a Kindle or MP3 player; 10,000-file listing speed; `getThumbnail` for videos on phones; behaviour when Android's Files app holds the device; unplugging during a download; Android TV boxes with USB host.
 
+
+---
+
+## 10. Listening tiles, animated WebP, video thumbnails, drop, find, SAF
+
+Requested 2026-10-29. Plan first, then the work; the findings of the research items are in [docs/RESEARCH_2026-10.md](docs/RESEARCH_2026-10.md). No device and no Android SDK were available (the SDK download host is blocked in the build container), so only the pure-Kotlin parts are compiled and unit-tested; everything else is **verify** on a device.
+
+| # | Request | Kind | Plan |
+| --- | --- | --- | --- |
+| 10.1 | Folder tiles of books being listened to show where we are | build | **done** (README §2 Listening, §3.12) |
+| 10.2 | Our own player for animated WebP / AVIF strips in tiles | research + build (WebP) | **WebP done** (README §3.4); AVIF and APNG: research doc §2 |
+| 10.3 | Faster video thumbnails, per format | research | **done**: findings and ranked proposals in the research doc §3; next step: the strip disk cache |
+| 10.4 | Full player screen, speed, sleep timer, shuffle, chapters, lyrics | next session | prompt in [docs/NEXT_SESSION.md](docs/NEXT_SESSION.md) |
+| 10.5 | Drop files and folders into the app (DeX, Chromebooks, split screen) | research + build (files) | **done** for the folder grid (README §2 Desktops, §3.9); open: research doc §5 |
+| 10.6 | Text editor: find, rename from the editor | build | **done** (README §2 Text editor) |
+| 10.7 | Storage Access Framework fallback (for a Play Store build) | research | **done**: options and a recommendation in the research doc §7; needs an owner decision |
+| 10.8 | Text editor: colour themes and richer colouring | build | planned, below |
+| 10.9 | Text editor and text previews: the best monospaced font available | build | **done**: JetBrains Mono NL bundled (README §6, *Code font*) |
+
+**Verify on a device:** the tile pill at 360 dp with 2–3 columns and in DeX; the label switching while a book plays (one tile recomposes per second); animated WebP strips of large stickers (memory: one full-size canvas) and of WebPs with odd offsets; the editor scrolling to the current match while the find field has focus (Compose scrolls a text field to its selection **verify** without focus); drops from My Files, Chrome, Gmail and Gallery in DeX, and a dropped folder.
+
+### 10.1 Where we are, on the folder tile
+
+- **Data.** `history.db` v2 adds `idx`, `total` and `duration` to `audio_folder` (an `ALTER TABLE … ADD COLUMN` migration, never a drop), written with every save from the player: the file number, the queue length and the current file's duration. Books saved by v1 show what they have (file and position) until they are played again.
+- **Loading.** The folder view reads the books of its subfolders in **one query** (`HistoryStore.foldersIn(parent)`, a path-prefix range like `files()`), once per listing and again when playback stops or the book changes; the book playing right now uses the live `NowPlaying` instead.
+- **Tile.** A dark pill over the top of the collage: an icon and a label, plus a thin progress line along the bottom of the collage (`(file − 1 + position / duration) / files`).
+  - Icon: **equalizer** = playing now, **headphones** = started, **✓** = finished.
+  - Label: the **longest of three variants that fits** the pill (measured, not guessed from a breakpoint), so a small tile is short and a wide one explains more:
+    - short: `12/30` (finished: no text, the ✓ alone)
+    - medium: `12/30 · 4:05`  (finished: `Finished`)
+    - long: `File 12 of 30 · 4:05 / 25:10`  (finished: `Finished · 30 files`)
+  - The variants are built by pure Kotlin (`ListenLabel`), unit-tested.
+- Not in this step: the ▶ resume button on the tile (§3.2) — the label is the first half of it.
+
+### 10.2 Animated WebP strips in tiles
+
+- **Why own code.** `AnimatedImageDrawable` (and Coil on top of it) only plays forward; there is no seek, so tiles show the first frame (README §6). The WebP container is simple (RIFF → `VP8X` with the animation flag → `ANIM` → `ANMF` frames with offset, size, duration, blend and dispose flags, each holding an ordinary `VP8` / `VP8L` (+ `ALPH`) bitstream).
+- **Plan.** `WebpAnim` (pure Kotlin, like `GifCodec`'s block scan): a chunk scan that reads the canvas size, frame count, total duration and each frame's chunk offsets without decoding, cached in `MetaStore` like GIFs. The strip pass rebuilds each needed frame as a standalone WebP in memory (`RIFF/WEBP/VP8X/ALPH/VP8` or `RIFF/WEBP/VP8L`), decodes it with the platform decoder at the strip scale, and composites it on one canvas with the frame's blend and dispose rules. It starts at the nearest **key frame** before each target (a frame that covers the canvas without blending, or follows a full-canvas dispose — the same rule libwebp uses), so a long animation decodes few frames.
+- **Detection.** The listing keeps `.webp` as an image (no extra read per file). The still decoder reads the first 30 bytes anyway: an animated WebP (`VP8X` flag bit 1) becomes a strip with frame count and duration, like a GIF; the tile shows the strip and scrubs it.
+- **AVIF (`avis`) and APNG:** researched only (research doc §2); they need the AV1 decoder / a PNG chunk splitter and are proposed for a later step.
+
+### 10.5 Drop into the app
+
+- `Modifier.dragAndDropTarget` (Compose 1.8) on the folder grid. Accepts drops of `content://` and `file://` URIs; `requestDragAndDropPermissions` keeps read access during the copy.
+- A drop on the grid **copies** into the open folder (never moves: the source app owns its files), with the existing progress, Stop, `freeName` (" (1)") and error summary of *Copy to…*. Our own tiles dropped back onto the same folder do nothing.
+- The grid shows a highlighted outline while a drag with files is over it.
+- **Folders:** a dropped directory (`vnd.android.document/directory`) is copied recursively when the drag permission allows listing its children; otherwise it is reported as skipped (**verify** with My Files in DeX).
+
+### 10.6 Text editor: find and rename
+
+- **Find:** `Ctrl` + F or the 🔍 button opens a bar under the top bar: the query, `3 / 17`, previous / next (`Enter`, `Shift` + `Enter`, `F3`, `Shift` + `F3`), *Match case*, ✕ (`Esc`). All matches get a background colour, the current one is selected and scrolled into view; in read-only files the list scrolls to its line. Matching is pure Kotlin (`TextSearch`, unit-tested), plain text, case-insensitive by default, capped at 10,000 matches.
+- **Rename:** a tap on the file name in the editor bar (or `F2`) opens a rename dialog with the name selected up to the extension; the same name rules as new files; never overwrites. The unsaved text, undo history and draft follow the new name; the colouring follows the new extension.
+- Replace is not part of this step.
+
+### 10.8 Text editor: colour themes and richer colouring
+
+Requested 2026-10-29, planned. Syntax colours exist today (`Highlight`, 11 lexer families, one light and one dark palette in `EditorScreen.rememberStyles`). The addition:
+
+- **Colour themes.** A theme is a named palette for the 12 `Role`s + background, text, selection, current line and find marks (§10.6). Built in: *Default* (today's), *One Dark*, *Solarized* (light / dark), *GitHub* (light / dark), *Monokai*, *Dracula*, *High contrast*. The default follows the app's day / night; a chosen theme is kept (settings, `editorTheme`). The palettes live in one pure-Kotlin table (`EditorTheme`), tested for contrast: each role ≥ 4.5 : 1 against its background (WCAG AA), checked in `EditorTest`.
+- **Where:** editor ⋮ → *Theme…* (a list with a live 3-line sample per theme), and Settings → *Text editor*. Text previews on tiles stay tinted by the tile (README §3.10), not themed.
+- **Richer colouring** in the editor:
+  - **current line** background;
+  - **matching bracket** (`()[]{}`, and tags in markup) highlighted next to the cursor, found by a bounded scan (±20,000 characters) that skips strings and comments using the existing spans;
+  - **whitespace marks** (optional: tabs as `→`, trailing spaces);
+  - **line numbers** in a gutter (optional; read-only files too), in the theme's muted colour.
+- **Limits unchanged:** no colours above 200 K characters (README §3.13); bracket matching and the current line still work there.
+- **Verify:** typing speed with the extra spans in a 1 MB file on a low-end phone; the `TextFieldValue` editor draws the gutter and current line from `onTextLayout` (line tops), so check scrolling smoothness.
+
+### 10.9 The best monospaced font available
+
+Requested 2026-10-29. **Done** the same day, with two changes to the plan below: the **no-ligature** edition (*JetBrains Mono NL*) is bundled instead of turning ligatures off by font features (smaller, simpler), and the crash screen keeps the system font. Hinting is dropped (high-density screens don't use it): ~250 KB for regular, bold and italic. Still to verify on a device: text-preview line fit and the editor's look at 10–12 sp. Today code, logs and tables use the system `monospace` (Droid Sans Mono on most phones, Samsung's own on One UI; no ligatures, weak Cyrillic on some builds).
+
+- **Bundle JetBrains Mono** (SIL Open Font License 1.1): the variable TTF subset to Latin, Latin-1, Cyrillic, Greek and box drawing / arrows is ~150–200 KB (regular + bold via the `wght` axis, or two static files ~110 KB each). Clear `0/O`, `1/l/I`, tall x-height for small sizes, full Cyrillic — the main reason over Fira Code / Source Code Pro / Cascadia Code, which are the alternatives considered (all OFL; Cascadia's Cyrillic is good too, but it is larger).
+- **Ligatures off** by default (`fontFeatureSettings = "liga 0, calt 0"`) — code reads character by character in an editor; a setting can turn them on.
+- **Used in:** the editor (`textStyle`), monospace text previews on tiles (`TextPreview`: `Typeface` from `res/font`, loaded once), the crash screen and the error log. Proportional text stays the system font.
+- **Setting:** *Code font*: JetBrains Mono (default) / System monospace. The system choice stays for devices where the user installed their own font (Samsung font styles change `monospace` too).
+- **Not chosen:** Google Fonts *downloadable fonts* (no APK size, but needs Google Play services — missing on many TV boxes and Huawei devices — and a network fetch on first use); the APK grows by ~0.2 MB instead (release APK ~8.3 MB today).
+- **Steps:** add `res/font/jetbrains_mono.ttf` (subset with `pyftsubset`, keep `OFL.txt` in `app/src/main/assets/licenses/` and a line in Settings → About), `FontFamily(Font(R.font.jetbrains_mono, …))` in one place (`ui/common/Fonts.kt`), replace the three `Monospace` uses and `Typeface.MONOSPACE`. **Verify** that the text-preview line count per tile (README §3.10) still fits, since the metrics differ from Droid Sans Mono.

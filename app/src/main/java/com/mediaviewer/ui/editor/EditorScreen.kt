@@ -2,6 +2,7 @@ package com.mediaviewer.ui.editor
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -24,8 +25,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -33,10 +36,12 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.rounded.WrapText
+import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Save
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -58,6 +63,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -97,9 +103,11 @@ import com.mediaviewer.domain.Highlight
 import com.mediaviewer.domain.Language
 import com.mediaviewer.domain.Role
 import com.mediaviewer.domain.Spans
+import com.mediaviewer.domain.TextSearch
 import com.mediaviewer.domain.model.OtherKind
 import com.mediaviewer.ui.AppViewModel
 import com.mediaviewer.ui.Screen
+import com.mediaviewer.ui.common.CodeFonts
 import com.mediaviewer.ui.common.StepSlider
 import com.mediaviewer.ui.common.TipIconButton
 import com.mediaviewer.ui.common.formatSize
@@ -126,6 +134,7 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
         vm.editorState?.takeIf { it.doc.path == screen.doc.path } ?: EditorState(vm, screen).also { vm.editorState = it }
     }
     val rootFocus = remember { FocusRequester() }
+    val findFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         state.announceDraft()
@@ -139,14 +148,26 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
 
     // Colours: lexed off the main thread once typing pauses; edits in between move the old ones.
     LaunchedEffect(Unit) {
-        snapshotFlow { state.value.text }.debounce(150).collectLatest { t ->
-            if (state.language == Language.PLAIN || t.length > TextFile.COLOUR_LIMIT) {
+        snapshotFlow { state.value.text to state.language }.debounce(150).collectLatest { (t, lang) ->
+            if (lang == Language.PLAIN || t.length > TextFile.COLOUR_LIMIT) {
                 state.spans = Spans.EMPTY
                 return@collectLatest
             }
-            val s = withContext(Dispatchers.Default) { Highlight.spans(t, state.language) }
-            if (state.value.text == t) state.spans = s
+            val s = withContext(Dispatchers.Default) { Highlight.spans(t, lang) }
+            if (state.value.text == t && state.language == lang) state.spans = s
         }
+    }
+
+    // Find (todo §10.6): matches for the text and query, off the main thread once typing pauses.
+    LaunchedEffect(Unit) {
+        snapshotFlow { if (state.findOpen) Triple(state.doc.text.takeIf { state.doc.readOnly } ?: state.value.text, state.query, state.matchCase) else null }
+            .debounce(100)
+            .collectLatest { f ->
+                if (f == null) return@collectLatest
+                val (t, q, case) = f
+                val found = withContext(Dispatchers.Default) { TextSearch.find(t, q, case) }
+                state.setMatches(found, t, q)
+            }
     }
 
     // Unsaved text survives the app being killed in the background (todo §6.3).
@@ -174,6 +195,27 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
                     ev.isCtrlPressed && ev.key == Key.Y -> state.redo().let { true }
                     ev.isCtrlPressed && (ev.key == Key.Equals || ev.key == Key.Plus || ev.key == Key.NumPadAdd) -> zoom(1).let { true }
                     ev.isCtrlPressed && (ev.key == Key.Minus || ev.key == Key.NumPadSubtract) -> zoom(-1).let { true }
+                    ev.isCtrlPressed && ev.key == Key.F -> {
+                        state.openFind()
+                        try {
+                            findFocus.requestFocus()
+                        } catch (e: IllegalStateException) {
+                        }
+                        true
+                    }
+                    ev.key == Key.F3 || (ev.isCtrlPressed && ev.key == Key.G) -> state.findNext(forward = !ev.isShiftPressed).let { true }
+                    ev.key == Key.F2 && busy == null && !state.doc.readOnly -> {
+                        state.renaming = true
+                        true
+                    }
+                    ev.key == Key.Escape && state.findOpen -> {
+                        state.closeFind()
+                        try {
+                            rootFocus.requestFocus()
+                        } catch (e: IllegalStateException) {
+                        }
+                        true
+                    }
                     ev.key == Key.Escape && busy == null -> state.close().let { true }
                     else -> false
                 }
@@ -184,6 +226,7 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
         val compact = maxWidth < 600.dp
         Column(Modifier.fillMaxSize()) {
             EditorBar(state, compact, settings.editorTextSp, settings.editorWrap, setTextSize, setWrap)
+            if (state.findOpen) FindBar(state, findFocus)
             Box(
                 Modifier
                     .fillMaxSize()
@@ -191,21 +234,23 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
                     .imePadding()
                     .textSizeGestures(::zoom),
             ) {
-                if (state.doc.readOnly) ReadOnlyText(state, settings.editorTextSp) else EditText(state, settings.editorTextSp, settings.editorWrap)
+                val code = CodeFonts.family(settings.codeFontBundled)
+                if (state.doc.readOnly) ReadOnlyText(state, settings.editorTextSp, code) else EditText(state, settings.editorTextSp, settings.editorWrap, code)
             }
         }
         Dialogs(state)
+        if (state.renaming) RenameDialog(state)
     }
 }
 
 @Composable
-private fun textStyle(state: EditorState, sp: Int): TextStyle {
+private fun textStyle(state: EditorState, sp: Int, code: FontFamily): TextStyle {
     val name = state.doc.name
     val kind = FileTypes.byExtension(name)?.other ?: OtherKind.TEXT
     // The same rule as the previews (README §3.10): code, logs and tables in monospace.
     val mono = state.language !in setOf(Language.PLAIN, Language.MARKDOWN) || FileTypes.monospace(name, kind)
     return TextStyle(
-        fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+        fontFamily = if (mono) code else FontFamily.Default,
         fontSize = sp.sp,
         lineHeight = 1.35.em,
         color = MaterialTheme.colorScheme.onBackground,
@@ -213,11 +258,15 @@ private fun textStyle(state: EditorState, sp: Int): TextStyle {
 }
 
 @Composable
-private fun EditText(state: EditorState, sp: Int, wrap: Boolean) {
+private fun EditText(state: EditorState, sp: Int, wrap: Boolean, code: FontFamily) {
     val styles = rememberStyles()
-    val transformation = remember(state.spans, styles) { SpanTransformation(state.spans, styles) }
+    val found = rememberFoundStyles()
+    val marks = if (state.findOpen) state.matches else NO_MATCHES
+    val transformation = remember(state.spans, styles, marks, state.current, state.query.length) {
+        SpanTransformation(state.spans, styles, Marks(marks, state.query.length, state.current, found))
+    }
     val prose = state.language == Language.PLAIN || state.language == Language.MARKDOWN
-    val style = textStyle(state, sp)
+    val style = textStyle(state, sp, code)
     val field = @Composable { modifier: Modifier ->
         BasicTextField(
             value = state.value,
@@ -247,13 +296,30 @@ private fun EditText(state: EditorState, sp: Int, wrap: Boolean) {
 
 /** Files from 1 to 10 MB: shown line by line, which stays fast where a text field would not. */
 @Composable
-private fun ReadOnlyText(state: EditorState, sp: Int) {
-    val style = textStyle(state, sp)
+private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily) {
+    val style = textStyle(state, sp, code)
     val lines by produceState<List<String>>(emptyList(), state.doc) {
         value = withContext(Dispatchers.Default) { state.doc.text.split('\n') }
     }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-        items(lines) { Text(it, style = style) }
+    val starts = remember(lines) { TextSearch.lineStarts(state.doc.text) }
+    val list = rememberLazyListState()
+    // Find: the list scrolls to the current match's line, a few lines below the top.
+    LaunchedEffect(state.jumps) {
+        val m = state.matches.getOrNull(state.current) ?: return@LaunchedEffect
+        if (lines.isNotEmpty()) list.scrollToItem((TextSearch.lineOf(starts, m) - 3).coerceAtLeast(0))
+    }
+    val found = rememberFoundStyles()
+    val marks = Marks(if (state.findOpen) state.matches else NO_MATCHES, state.query.length, state.current, found)
+    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+        itemsIndexed(lines) { i, line ->
+            if (marks.starts.isEmpty() || i >= starts.size) {
+                Text(line, style = style)
+            } else {
+                val b = AnnotatedString.Builder(line)
+                marks.addTo(b, starts[i], starts[i] + line.length)
+                Text(b.toAnnotatedString(), style = style)
+            }
+        }
     }
 }
 
@@ -274,7 +340,13 @@ private fun EditorBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TipIconButton("Back (Esc)", onClick = state::close) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
-            Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(enabled = !readOnly, onClickLabel = "Rename") { state.renaming = true }
+                    .padding(horizontal = 4.dp),
+            ) {
                 Text(
                     middleEllipsis(doc.name, 48) + if (state.dirty) " •" else "",
                     style = MaterialTheme.typography.titleSmall,
@@ -306,6 +378,9 @@ private fun EditorBar(
                     }
                 }
             }
+            TipIconButton("Find (Ctrl+F)", onClick = { if (state.findOpen) state.closeFind() else state.openFind() }) {
+                Icon(Icons.Rounded.Search, contentDescription = "Find")
+            }
             if (!compact) StepSlider(EDITOR_TEXT_STEPS, textSp, Icons.Rounded.FormatSize, "Text size", onChange = onTextSize)
             if (!readOnly) {
                 TipIconButton("Save (Ctrl+S)", onClick = { state.save() }, enabled = state.dirty) {
@@ -335,6 +410,16 @@ private fun EditorBar(
                             leadingIcon = { Icon(Icons.AutoMirrored.Rounded.WrapText, contentDescription = null) },
                             trailingIcon = { Checkbox(checked = wrap, onCheckedChange = null) },
                             onClick = { onWrap(!wrap) },
+                        )
+                    }
+                    if (!readOnly) {
+                        DropdownMenuItem(
+                            text = { Text("Rename…") },
+                            leadingIcon = { Icon(Icons.Rounded.DriveFileRenameOutline, contentDescription = null) },
+                            onClick = {
+                                menu = false
+                                state.renaming = true
+                            },
                         )
                     }
                     if (!readOnly && doc.charset != Charsets.UTF_8) {
@@ -404,9 +489,13 @@ private fun Dialogs(state: EditorState) {
 // ---------------------------------------------------------------------- colours
 
 /** Applies the lexer's spans as styles; the text itself is unchanged, so offsets map 1:1. */
-private class SpanTransformation(private val spans: Spans, private val styles: Array<SpanStyle>) : VisualTransformation {
+private class SpanTransformation(
+    private val spans: Spans,
+    private val styles: Array<SpanStyle>,
+    private val marks: Marks,
+) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
-        if (spans.size == 0) return TransformedText(text, OffsetMapping.Identity)
+        if (spans.size == 0 && marks.starts.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
         val n = text.length
         val b = AnnotatedString.Builder(text)
         for (i in 0 until spans.size) {
@@ -414,7 +503,34 @@ private class SpanTransformation(private val spans: Spans, private val styles: A
             val e = minOf(spans.end(i), n)
             if (s < e) b.addStyle(styles[spans.role(i).ordinal], s, e)
         }
+        marks.addTo(b, 0, n)
         return TransformedText(b.toAnnotatedString(), OffsetMapping.Identity)
+    }
+}
+
+private val NO_MATCHES = IntArray(0)
+
+/** Find matches (todo §10.6) as background colours; the current one stronger. */
+private class Marks(val starts: IntArray, val length: Int, val current: Int, val styles: Pair<SpanStyle, SpanStyle>) {
+    /** Marks the matches inside [from, to) of the text, shifted so that [from] is offset 0. */
+    fun addTo(b: AnnotatedString.Builder, from: Int, to: Int) {
+        if (length == 0 || starts.isEmpty()) return
+        var i = starts.binarySearch(from - length + 1).let { if (it >= 0) it else -it - 1 }
+        while (i < starts.size && starts[i] < to) {
+            val s = maxOf(starts[i], from)
+            val e = minOf(starts[i] + length, to)
+            if (s < e) b.addStyle(if (i == current) styles.second else styles.first, s - from, e - from)
+            i++
+        }
+    }
+}
+
+@Composable
+private fun rememberFoundStyles(): Pair<SpanStyle, SpanStyle> {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return remember(dark) {
+        if (dark) SpanStyle(background = Color(0x664D6A2A)) to SpanStyle(background = Color(0xFF8A6D00), color = Color.White)
+        else SpanStyle(background = Color(0x66FFE082)) to SpanStyle(background = Color(0xFFFFB300), color = Color.Black)
     }
 }
 

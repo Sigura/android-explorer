@@ -65,6 +65,8 @@ data class AppSettings(
     /** Editor text size in sp (todo §6.6), one of `EDITOR_TEXT_STEPS`. */
     val editorTextSp: Int = 14,
     val editorWrap: Boolean = true,
+    /** Code, logs and tables in the bundled JetBrains Mono; false = the system monospace (todo §10.9). */
+    val codeFontBundled: Boolean = true,
     /** A tap on a text file opens the editor; otherwise another app (todo §6.2). */
     val textInApp: Boolean = true,
     /** The player is collapsed to its slim bar (todo §4.3). */
@@ -143,6 +145,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val windowHint = booleanPreferencesKey("window_hint_shown")
         val editorTextSp = intPreferencesKey("editor_text_sp")
         val editorWrap = booleanPreferencesKey("editor_wrap")
+        val codeFontBundled = booleanPreferencesKey("code_font_bundled")
         val textInApp = booleanPreferencesKey("text_open_in_app")
         val playerCompact = booleanPreferencesKey("player_compact")
         val recent = stringPreferencesKey("recent")
@@ -252,6 +255,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
             windowHintShown = p[K.windowHint] ?: false,
             editorTextSp = (p[K.editorTextSp] ?: d.editorTextSp).coerceIn(8, 40),
             editorWrap = p[K.editorWrap] ?: d.editorWrap,
+            codeFontBundled = p[K.codeFontBundled] ?: d.codeFontBundled,
             textInApp = p[K.textInApp] ?: d.textInApp,
             playerCompact = p[K.playerCompact] ?: d.playerCompact,
         )
@@ -284,6 +288,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p[K.windowHint] = s.windowHintShown
         p[K.editorTextSp] = s.editorTextSp
         p[K.editorWrap] = s.editorWrap
+        p[K.codeFontBundled] = s.codeFontBundled
         p[K.textInApp] = s.textInApp
         p[K.playerCompact] = s.playerCompact
     }
