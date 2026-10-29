@@ -10,6 +10,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.util.LruCache
 import androidx.compose.runtime.Immutable
@@ -419,13 +420,19 @@ class Thumbnails(
      * frames composited by [webpFrames]. A still WebP stays an image.
      */
     private suspend fun webp(entry: FileEntry, w: Int, h: Int, full: Boolean, firstOnly: Boolean, emit: suspend (Thumb) -> Unit) {
+        // First visit: the still (frame 1) goes up at once; the container scan comes after it.
+        var shown: Still? = null
+        if (meta.get(entry.path, entry.size, entry.mtime) == null) {
+            shown = still(entry.path, w, h)
+            emit(Thumb.Image(shown))
+        }
         val m = webpMeta(entry)
         if (m.frameCount <= 1) {
-            emit(cachePut(entry.path, w, Thumb.Image(still(entry.path, w, h))))
+            emit(cachePut(entry.path, w, Thumb.Image(shown ?: still(entry.path, w, h))))
             return
         }
         val first = cached(entry.path, w) as? Thumb.Strip ?: run {
-            val s = still(entry.path, w, h)
+            val s = shown ?: still(entry.path, w, h)
             Thumb.Strip(listOf(s.image), m.width, m.height, null, gif = true, complete = false, badge = "WEBP")
         }
         emit(first)
@@ -523,13 +530,20 @@ class Thumbnails(
                     val m = readVideoMeta(r)
                     meta.put(entry.path, entry.size, entry.mtime, m)
                     val frames = ArrayList<ImageBitmap>()
-                    for (f in FRACTIONS) {
+                    val todo = ArrayDeque(FRACTIONS.toList())
+                    val t0 = SystemClock.uptimeMillis()
+                    var last: Bitmap? = null
+                    while (todo.isNotEmpty()) {
                         if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                        val bmp = videoFrame(r, (m.durationMs * f * 1000).toLong(), m, w, h) ?: continue
+                        val us = (m.durationMs * todo.removeFirst() * 1000).toLong()
+                        val bmp = distinctFrame(r, us, m, w, h, last) ?: continue
                         frames.add(bmp.asImageBitmap())
+                        last = bmp
                         if (frames.size == 1) {
                             first.complete(Thumb.Strip(frames.toList(), m.width, m.height, m.durationMs, gif = false, complete = false))
                             if (firstOnly) break
+                            // A slow file (software codec, no seek index): 3 frames instead of 5 (todo §10.3).
+                            if (SystemClock.uptimeMillis() - t0 > SLOW_FIRST_FRAME_MS) todo.retainAll { it in SLOW_FRACTIONS }
                         }
                     }
                     if (frames.isEmpty()) throw IllegalStateException("no video frames")
@@ -560,16 +574,31 @@ class Thumbnails(
         }
     }
 
-    private fun videoFrame(r: MediaMetadataRetriever, us: Long, m: MediaMeta, w: Int, h: Int): Bitmap? {
+    /**
+     * The frame at [us], unless it is the same picture as [last]: with keyframes far apart, nearby
+     * fractions land on the same keyframe, so the next keyframe after [us] is tried instead, and
+     * the fraction is skipped if that is the same picture too (todo §10.3).
+     */
+    private fun distinctFrame(r: MediaMetadataRetriever, us: Long, m: MediaMeta, w: Int, h: Int, last: Bitmap?): Bitmap? {
+        val bmp = videoFrame(r, us, m, w, h) ?: return null
+        if (last == null || !bmp.sameAs(last)) return bmp
+        bmp.recycle()
+        val next = videoFrame(r, us, m, w, h, MediaMetadataRetriever.OPTION_NEXT_SYNC) ?: return null
+        if (!next.sameAs(last)) return next
+        next.recycle()
+        return null
+    }
+
+    private fun videoFrame(r: MediaMetadataRetriever, us: Long, m: MediaMeta, w: Int, h: Int, option: Int = MediaMetadataRetriever.OPTION_CLOSEST_SYNC): Bitmap? {
         val sw = if (m.width > 0) m.width else w
         val sh = if (m.height > 0) m.height else h
         val s = coverScale(sw, sh, w, h)
         val dw = max(1, (sw * s).roundToInt())
         val dh = max(1, (sh * s).roundToInt())
         return if (Build.VERSION.SDK_INT >= 27) {
-            r.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, dw, dh)
+            r.getScaledFrameAtTime(us, option, dw, dh)
         } else {
-            r.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
+            r.getFrameAtTime(us, option)?.let { full ->
                 Bitmap.createScaledBitmap(full, dw, dh, true).also { if (it !== full) full.recycle() }
             }
         }
@@ -718,6 +747,9 @@ class Thumbnails(
         /** Watchdogs grow ×2 per timeout of a file, at most ×8 (a 5 s decode gets up to 40 s). */
         const val MAX_SCALE_SHIFT = 3
         val FRACTIONS = floatArrayOf(0.1f, 0.3f, 0.5f, 0.7f, 0.9f)
+        /** Slow files (first frame over [SLOW_FIRST_FRAME_MS]) keep only these after the first. */
+        private val SLOW_FRACTIONS = setOf(0.5f, 0.9f)
+        const val SLOW_FIRST_FRAME_MS = 800L
 
         /** WebP files may be animated: their tiles take the strip path, which shows a still WebP as an image (todo §10.2). */
         fun mayAnimate(entry: FileEntry) = entry.type == MediaType.IMAGE && entry.name.endsWith(".webp", ignoreCase = true)

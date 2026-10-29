@@ -52,6 +52,22 @@ Today (README §3.4): one `MediaMetadataRetriever` per file, `setDataSource` + m
 | **AVI** (MPEG-4 ASP / DivX / Xvid, MJPEG, H.264) | **No AVI extractor in AOSP's `MediaMetadataRetriever`** (some Samsung builds add one) → today's broken icon (README §6) | Not supported at all on most devices | Media3 has an `AviExtractor` (since 2.17): frames through Media3 make AVI thumbnails possible where a decoder exists (MPEG-4 ASP has a software decoder in AOSP; MJPEG doesn't) **verify** |
 | **FLV, MPEG-PS (`.vob`, `.mpg`)** | Not in the supported list of the app today | — | Media3 extracts both; add them to `FileTypes` once frames go through Media3 |
 
+### Done (2026-10-29)
+
+- **Duplicate frames:** a frame that is the same picture as the one before (`Bitmap.sameAs`, sparse keyframes) is replaced by the next keyframe after its time (`OPTION_NEXT_SYNC`), or skipped when that is the same too. Fewer wasted decodes are not the point; tiles no longer show the same frame twice.
+- **Slow files:** when the first frame took over 800 ms (software codec, MKV without Cues, TS), only the 50 % and 90 % frames follow: 3 decodes instead of 5.
+- The disk cache (proposal 1) was declined by the owner: thumbnails stay in memory only.
+
+### Format shortcuts (checked, not built)
+
+| Format | Shortcut | Verdict |
+| --- | --- | --- |
+| JPEG | EXIF thumbnail (`ExifInterface.getThumbnailBitmap`) | Usually 160 × 120: too small for tiles (≥ 300 px). The decoder already scales inside the JPEG decode (DCT scaling 1/2 – 1/8 through `setTargetSize`), which is the fast path |
+| HEIC / HEIF | Embedded `thmb` image item (phones store ~320 – 512 px) | `ImageDecoder` doesn't use it and no platform API exposes it; reading it means parsing the `meta` box and decoding the HEVC tile with `MediaCodec` — not worth it |
+| JPEG, HEIC, MP4 (anything MediaStore indexed) | `ContentResolver.loadThumbnail(uri, size)` (API 29+): MediaStore's own cached thumbnail, often already made by the gallery | The one real shortcut: ~10 ms when cached. Limits: cached at ~512 px (blurry on large DeX tiles), a video's thumbnail is MediaStore's own representative frame, not the 10 % frame, files in `.nomedia` folders are not indexed, and an uncached one is generated synchronously in MediaProvider. Needs a per-folder id query. **Proposed, not built** |
+| MP4 / M4V with a cover (`covr`) | `getEmbeddedPicture()` | Only music videos and podcasts have one |
+| GIF | — | The first frame already takes a few ms (`GifCodec`) |
+
 ### Ranked proposals
 
 1. **Disk cache of strips** (all formats). One small WebP per tile (the 5 frames side by side, or the frames in one file) in `cacheDir/strips/`, keyed by path + size + mtime + width bucket; `LruCache`-style size cap (~100 MB) and the existing `meta.db` for the index. Read on IO before any decode. Expected: revisits and app restarts show strips at once, with no video decode at all. Same for GIF and animated WebP strips.
