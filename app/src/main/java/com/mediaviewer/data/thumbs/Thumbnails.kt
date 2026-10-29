@@ -170,8 +170,11 @@ class Thumbnails(
     /** APK icons and names (todo §1.0); set by the app. */
     @Volatile var packageManager: PackageManager? = null
 
-    /** The device's own thumbnail of a file on an MTP device (todo §9.4); null when it has none. */
-    @Volatile var remote: (suspend (String) -> ByteArray?)? = null
+    /** The device's own thumbnail of a file on an MTP device (todo §9.4, §9.8 item 8); null when it has none. */
+    @Volatile var remote: (suspend (FileEntry) -> ByteArray?)? = null
+
+    /** Collage candidates of a folder on an MTP device and its item count (todo §9.8 item 5). */
+    @Volatile var remoteFolder: (suspend (String) -> Pair<List<FileEntry>, Int>)? = null
 
     /** Files whose content turned out not to be text: no preview, no retry this session. */
     private val notText: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -246,8 +249,9 @@ class Thumbnails(
         active.update { it + 1 }
         try {
             if (MtpPaths.isMtp(entry.path)) {
-                // Device files: only the thumbnail the device made; folders and other files keep their icon.
-                if (entry.isMedia) remoteStill(entry.path, width, height)?.let { emit(cachePut(entry.path, width, Thumb.Image(it))) }
+                // Device files: the thumbnail the device made; folders get a collage of those, other files keep their icon.
+                if (entry.isMedia) remoteStill(entry, width, height)?.let { emit(cachePut(entry.path, width, Thumb.Image(it))) }
+                else if (entry.isFolder) remoteFolder(entry.path, width, height)?.let { emit(cachePut(entry.path, width, it)) }
             } else when (entry.type) {
                 MediaType.IMAGE ->
                     if (mayAnimate(entry)) animatedStill(entry, width, height, full, firstOnly) { emit(it) }
@@ -360,8 +364,8 @@ class Thumbnails(
     }
 
     /** A device thumbnail (JPEG, usually 160 px): the device call has its own watchdog, the decode this one. */
-    private suspend fun remoteStill(path: String, w: Int, h: Int): Still? {
-        val bytes = remote?.invoke(path) ?: return null
+    private suspend fun remoteStill(entry: FileEntry, w: Int, h: Int): Still? {
+        val bytes = remote?.invoke(entry) ?: return null
         return watchdog(DECODE_MS) {
             val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
@@ -930,6 +934,14 @@ class Thumbnails(
 
     // ---------------------------------------------------------------- folders
 
+    /** A device folder's collage from its files' device thumbnails; null (the icon) when none has one. */
+    private suspend fun remoteFolder(path: String, w: Int, h: Int): Thumb.Folder? {
+        val (candidates, count) = remoteFolder?.invoke(path) ?: return null
+        if (candidates.isEmpty()) return null
+        val t = Thumb.Folder(candidates, count, ConcurrentHashMap())
+        return t.takeIf { loadFolderGroup(it, 0, w, h).isNotEmpty() }
+    }
+
     private suspend fun folder(path: String, w: Int, h: Int): Thumb.Folder {
         val scan = watchdog(SCAN_MS) { folderCandidates(path) }
         val t = Thumb.Folder(scan.candidates, scan.count, ConcurrentHashMap(), scan.audio)
@@ -958,7 +970,9 @@ class Thumbnails(
         return out
     }
 
-    private suspend fun previewStill(e: FileEntry, w: Int, h: Int): Still = when (e.type) {
+    private suspend fun previewStill(e: FileEntry, w: Int, h: Int): Still = if (MtpPaths.isMtp(e.path)) {
+        remoteStill(e, w, h) ?: throw IllegalStateException("no device thumbnail")
+    } else when (e.type) {
         MediaType.ANIMATED -> watchdog(DECODE_MS) {
             val f = gifFrames(File(e.path), intArrayOf(0), w, h).first()
             Still(f.first, f.second, f.third)

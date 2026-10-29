@@ -13,14 +13,19 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.mediaviewer.data.fs.FileOps
+import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.FolderScanner
 import com.mediaviewer.data.fs.TAG
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.domain.model.FileEntry
+import com.mediaviewer.domain.model.MediaType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +37,6 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.coroutines.coroutineContext
 
 /**
  * Cameras, phones and players connected over USB as MTP or PTP devices (todo §9): found through
@@ -58,11 +62,14 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
 
     private val connections = ConcurrentHashMap<Int, MtpConnection>()
+    private val storageWatch = ConcurrentHashMap<Int, Job>()
     private val openLock = Mutex()
     private var started = false
 
     /** Local copies of device files: `cache/mtp/<device>/<storage>/<folders>/<name>`. */
-    val mirrorRoot = File(context.cacheDir, "mtp")
+    val mirror = MtpMirror(File(context.cacheDir, "mtp"), ::connection)
+
+    private val transfers = MtpTransfer(::connection, File(context.cacheDir, "mtp-transfer"))
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
@@ -91,7 +98,10 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
             addAction(ACTION_PERMISSION)
         }
         ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        scope.launch(Dispatchers.IO) { mirrorRoot.deleteRecursively() }
+        scope.launch(Dispatchers.IO) {
+            mirror.clear()
+            File(context.cacheDir, "mtp-transfer").deleteRecursively()
+        }
         refresh()
     }
 
@@ -146,28 +156,38 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
                     setState(dev.deviceId, State.FAILED, "In use by another app — close it, or unplug the device and plug it in again")
                     return@withLock
                 }
-                val c = MtpConnection(dev.deviceId, mtp, conn)
+                val c = MtpConnection(dev.deviceId, AndroidMtpDriver(mtp, conn))
                 connections[dev.deviceId] = c
-                val storages = try {
-                    c.storages()
-                } catch (e: IOException) {
-                    setState(dev.deviceId, State.FAILED, e.message)
-                    return@withLock
-                }
-                val vols = storages.map { s ->
-                    Volume(MtpPaths.storageRoot(dev.deviceId, s.id), s.label, removable = true, freeBytes = s.freeBytes, totalBytes = s.totalBytes, device = true)
-                }
-                _devices.update { list ->
-                    list.map {
-                        if (it.id != dev.deviceId) it
-                        else it.copy(
-                            state = State.READY, storages = vols,
-                            message = if (vols.isEmpty()) "Unlock the device and choose “File transfer”, then tap here" else null,
-                        )
-                    }
-                }
+                if (!readStorages(c)) return@withLock
+                c.startEvents()
+                storageWatch.put(dev.deviceId, scope.launch {
+                    c.changes.filter { it == MtpConnection.Change.Storages }.collect { readStorages(c) }
+                })?.cancel()
             }
         }
+    }
+
+    /** The device's storages as volumes; false (and the device FAILED) when they can't be read. */
+    private suspend fun readStorages(c: MtpConnection): Boolean {
+        val storages = try {
+            c.storages()
+        } catch (e: IOException) {
+            if (connections[c.deviceId] === c) setState(c.deviceId, State.FAILED, e.message)
+            return false
+        }
+        val vols = storages.map { s ->
+            Volume(MtpPaths.storageRoot(c.deviceId, s.id), s.label, removable = true, freeBytes = s.freeBytes, totalBytes = s.totalBytes, device = true)
+        }
+        _devices.update { list ->
+            list.map {
+                if (it.id != c.deviceId) it
+                else it.copy(
+                    state = State.READY, storages = vols,
+                    message = if (vols.isEmpty()) "Unlock the device and choose “File transfer”, then tap here" else null,
+                )
+            }
+        }
+        return true
     }
 
     private fun setState(id: Int, state: State, message: String?) {
@@ -175,9 +195,10 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
     }
 
     private fun detached(id: Int) {
+        storageWatch.remove(id)?.cancel()
         connections.remove(id)?.close()
         _devices.update { list -> list.filter { it.id != id } }
-        scope.launch(Dispatchers.IO) { File(mirrorRoot, id.toString()).deleteRecursively() }
+        scope.launch(Dispatchers.IO) { mirror.clear(id) }
     }
 
     fun connection(path: String): MtpConnection? = MtpPaths.parse(path)?.let { connections[it.deviceId] }
@@ -195,79 +216,72 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
         return c.scan(dir, showHidden).flowOn(Dispatchers.IO)
     }
 
-    suspend fun thumbnail(path: String): ByteArray? = connection(path)?.thumbnail(path)
+    /**
+     * Live updates of the open device folder [dir] (todo §9.8 item 3), from the device's events.
+     * Hidden files are left out unless [showHidden].
+     */
+    fun watch(dir: String, showHidden: Boolean): Flow<FolderListing.Change> {
+        val c = connection(dir) ?: return emptyFlow()
+        return c.changes.mapNotNull { ch ->
+            when (ch) {
+                is MtpConnection.Change.Added ->
+                    ch.entry.takeIf { ch.dir == dir && (showHidden || !FolderScanner.isHidden(it.name)) }?.let { FolderListing.Change.Added(it) }
+                is MtpConnection.Change.Removed -> {
+                    mirror.forget(ch.path)
+                    if (MtpPaths.parent(ch.path) == dir) FolderListing.Change.Removed(ch.path) else null
+                }
+                MtpConnection.Change.Storages -> null
+            }
+        }
+    }
+
+    /**
+     * A device file's thumbnail: the one the device made, or, for small images it has none for
+     * (todo §9.8 item 8: some cameras for RAW + JPEG pairs, many players), the file itself,
+     * downloaded into the mirror.
+     */
+    suspend fun thumbnail(entry: FileEntry): ByteArray? {
+        val c = connection(entry.path) ?: return null
+        c.thumbnail(entry.path)?.let { return it }
+        if (c.hasThumbnail(entry.path) != false || !downloadsForThumbnail(entry)) return null
+        return mirror.fetch(entry)?.readBytes()
+    }
+
+    /** Folder collage candidates on a device (todo §9.8 item 5) and the folder's item count. */
+    suspend fun folderPreview(dir: String): Pair<List<FileEntry>, Int> = connection(dir)?.folderPreview(dir) ?: (emptyList<FileEntry>() to 0)
+
+    /** Subfolders of a device folder, for the folder picker. */
+    suspend fun subfolders(dir: String): List<FileEntry> = connection(dir)?.list(dir, showHidden = false)?.filter { it.isFolder } ?: throw DeviceGone()
+
+    /** *New folder* on a device (todo §9.8 item 2); returns its path. */
+    suspend fun mkdir(dir: String, name: String): String = (connection(dir) ?: throw DeviceGone()).mkdir(dir, name)
+
+    /** Deletes a device file or folder for good (todo §9.8 item 1), and its copy in the mirror. */
+    suspend fun delete(path: String) {
+        (connection(path) ?: throw DeviceGone()).delete(path)
+        mirror.forget(path)
+    }
 
     // ---------------------------------------------------------------- local mirror
 
-    fun mirrorOf(path: String): File? = MtpPaths.mirrorRelative(path)?.let { File(mirrorRoot, it) }
-
-    fun isMirror(path: String): Boolean = path == mirrorRoot.path || path.startsWith(mirrorRoot.path + "/")
+    fun isMirror(path: String): Boolean = mirror.isMirror(path)
 
     /** The device path of a mirrored file or folder. */
-    fun remoteOf(localPath: String): String? =
-        if (!isMirror(localPath)) null else MtpPaths.fromMirrorRelative(localPath.removePrefix(mirrorRoot.path))
+    fun remoteOf(localPath: String): String? = mirror.remoteOf(localPath)
 
     /**
-     * The local copy of [entry], downloaded now unless an earlier copy of the same size is there.
-     * Returns null when the device is gone.
+     * *Copy to…* / *Move to…* with a device on either side (todo §9.5, §9.8 item 2): files and
+     * whole folders, `(1)` names for clashes, progress per file and Stop.
      */
-    suspend fun fetch(entry: FileEntry, onProgress: (done: Long, total: Long) -> Unit = { _, _ -> }): File? {
-        val c = connection(entry.path) ?: return null
-        val dest = mirrorOf(entry.path) ?: return null
-        if (dest.isFile && dest.length() == entry.size) return dest
-        c.download(entry.path, dest, onProgress)
-        return dest
-    }
-
-    /** Bytes in the mirror; [MIRROR_BUDGET] caps what a slideshow downloads ahead. */
-    fun mirrorBytes(): Long = mirrorRoot.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-
-    /** Frees the mirror except [keep] (the folder being shown). */
-    fun trimMirror(keep: File) {
-        mirrorRoot.walkBottomUp().forEach { f ->
-            if (f.isFile && !f.path.startsWith(keep.path + "/")) f.delete()
-            if (f.isDirectory && f != mirrorRoot && f.list()?.isEmpty() == true) f.delete()
-        }
-    }
-
-    /**
-     * "Copy to…" from a device (todo §9.5): files and whole folders into [destDir]. Name clashes
-     * get a " (1)" suffix, as local copies do. [onProgress] gets the file being copied.
-     */
-    suspend fun importTo(entries: List<FileEntry>, destDir: File, onProgress: (name: String) -> Unit): FileOps.Result {
-        val failed = ArrayList<Pair<String, String>>()
-        var done = 0
-        suspend fun copy(e: FileEntry, into: File) {
-            coroutineContext.ensureActive()
-            val c = connection(e.path) ?: throw IOException("Device disconnected")
-            val target = FileOps.freeName(into, e.name)
-            if (e.isFolder) {
-                if (!target.mkdirs()) throw IOException("can't create ${target.name}")
-                val children = ArrayList<FileEntry>()
-                c.scan(e.path, showHidden = true).collect { ev ->
-                    when (ev) {
-                        is FolderScanner.Event.Batch -> children.addAll(ev.entries)
-                        is FolderScanner.Event.Failed -> throw IOException(ev.reason)
-                    }
-                }
-                for (child in children) copy(child, target)
-            } else {
-                onProgress(e.name)
-                c.download(e.path, target)
-            }
-        }
-        for (e in entries) {
-            try {
-                copy(e, destDir)
-                done++
-            } catch (ex: kotlinx.coroutines.CancellationException) {
-                throw ex
-            } catch (ex: Exception) {
-                Log.w(TAG, "Import failed: ${e.path}", ex)
-                failed.add(e.path to (ex.message ?: ex.javaClass.simpleName))
-            }
-        }
-        return FileOps.Result(done, failed)
+    suspend fun transfer(
+        entries: List<FileEntry>,
+        destDir: String,
+        move: Boolean,
+        onProgress: (index: Int, total: Int, name: String) -> Unit,
+        onMoved: (String) -> Unit,
+    ): FileOps.Result = transfers.run(entries, destDir, move, onProgress) { path ->
+        if (MtpPaths.isMtp(path)) mirror.forget(path)
+        onMoved(path)
     }
 
     private fun nameOf(d: UsbDevice): String {
@@ -289,8 +303,15 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
     companion object {
         private const val ACTION_PERMISSION = "com.mediaviewer.USB_PERMISSION"
 
-        /** A slideshow stops downloading ahead once the mirror holds this much. */
-        const val MIRROR_BUDGET = 2L * 1024 * 1024 * 1024
+        /** Images up to this size are downloaded for a thumbnail when the device has none (todo §9.8 item 8). */
+        const val THUMB_DOWNLOAD_MAX = 8L * 1024 * 1024
+
+        /** Images the platform decodes; RAW files without a device thumbnail keep their icon. */
+        private val DECODABLE = setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "avif", "dng")
+
+        fun downloadsForThumbnail(e: FileEntry): Boolean =
+            (e.type == MediaType.IMAGE || e.type == MediaType.ANIMATED) && e.size in 1..THUMB_DOWNLOAD_MAX &&
+                e.name.substringAfterLast('.', "").lowercase() in DECODABLE
 
         /**
          * PTP cameras use the still-image class (6); phones and players in MTP mode often use a

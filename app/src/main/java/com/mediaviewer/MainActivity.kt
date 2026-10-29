@@ -1,6 +1,9 @@
 package com.mediaviewer
 
 import android.content.Intent
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.InputDevice
@@ -76,6 +79,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         // README §7.1: settings are read before the first frame, so defaults never flash.
+        if (savedInstanceState == null) deviceAttached(intent)
         splash.setKeepOnScreenCondition { !vm.ready.value }
         enableEdgeToEdge()
         setContent {
@@ -86,6 +90,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        deviceAttached(intent)
+    }
+
+    /** Opened by Android for a camera just plugged in (todo §9.8 item 6). */
+    @Suppress("DEPRECATION")
+    private fun deviceAttached(intent: Intent?) {
+        if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+        val dev = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        else intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        dev?.let { vm.deviceAttached(it.deviceId) }
     }
 
     override fun onResume() {

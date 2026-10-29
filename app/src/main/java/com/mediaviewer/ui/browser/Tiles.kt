@@ -392,13 +392,11 @@ private fun TileMenu(entry: FileEntry, browser: BrowserState, offset: DpOffset, 
             if (!entry.isFolder && entry.type != MediaType.PARTIAL) Item("Open with…") { browser.openWith(entry) }
         }
         Item(if (entry.path in browser.selection) "Deselect" else "Select") { browser.select(entry) }
-        // Device folders (todo §9) are read-only: copying to this phone is the one transfer.
-        if (browser.remote) {
-            Item("Copy to…") { browser.transfer(targets, move = false) }
-            return@DropdownMenu
+        // Device folders (todo §9): no share or clipboard, the files aren't on this phone.
+        if (!browser.remote) {
+            Item(if (many) "Share ${targets.size} items" else "Share", enabled = files > 0) { browser.share(targets) }
+            Item("Copy (Ctrl+C)", enabled = files > 0) { copyFiles(ctx, targets) }
         }
-        Item(if (many) "Share ${targets.size} items" else "Share", enabled = files > 0) { browser.share(targets) }
-        Item("Copy (Ctrl+C)", enabled = files > 0) { copyFiles(ctx, targets) }
         Item("Move to…") { browser.transfer(targets, move = true) }
         Item("Copy to…") { browser.transfer(targets, move = false) }
         Item(if (many) "Delete ${targets.size} items" else "Delete") { browser.delete(targets) }

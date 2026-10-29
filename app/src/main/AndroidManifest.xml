@@ -57,6 +57,7 @@
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
             android:exported="true"
+            android:launchMode="singleTop"
             android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">
             <!-- Samsung DeX: in the full-screen slideshow, the taskbar appears only after 2 s at the screen edge. -->
@@ -73,6 +74,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- A camera plugged in (todo §9.8 item 6): "Open Media Viewer?", which also grants USB access. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_devices" />
         </activity>
 
         <!-- Crash screen (README §3.5): its own process, so it opens even when the app can't start. -->

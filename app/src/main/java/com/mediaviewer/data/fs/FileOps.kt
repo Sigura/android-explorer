@@ -55,15 +55,19 @@ object FileOps {
         return Result(done, failed)
     }
 
-    fun freeName(dir: File, name: String): File {
-        var f = File(dir, name)
-        if (!f.exists()) return f
+    fun freeName(dir: File, name: String): File = File(dir, freeName(name) { File(dir, it).exists() })
+
+    /** [name], or `name (1).ext`, `name (2).ext`… : the first one that isn't [taken]. */
+    fun freeName(name: String, taken: (String) -> Boolean): String {
+        if (!taken(name)) return name
         val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
         val base = name.substring(0, dot)
         val ext = name.substring(dot)
         var n = 1
-        while (f.exists()) f = File(dir, "$base (${n++})$ext")
-        return f
+        while (true) {
+            val candidate = "$base (${n++})$ext"
+            if (!taken(candidate)) return candidate
+        }
     }
 
     private suspend fun copyRecursively(src: File, target: File) {

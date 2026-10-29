@@ -46,8 +46,9 @@ class BrowserState(
     var pendingTransfer by mutableStateOf<Transfer?>(null)
 
     /**
-     * The folder is on an MTP device (todo §9): read-only for now, so share, move, delete and
-     * editing are left out, and files are fetched before they open.
+     * The folder is on an MTP device (todo §9): share, the clipboard, new text files, favourites
+     * and editing are left out, and files are fetched before they open. Delete, move, copy and
+     * new folders work (todo §9.8 items 1, 2).
      */
     val remote: Boolean get() = MtpPaths.isMtp(vm.listing.value?.path)
 
@@ -163,7 +164,7 @@ class BrowserState(
     fun keyTargets(): List<FileEntry> = if (selectionMode) selectedEntries() else listOfNotNull(focused)
 
     fun delete(list: List<FileEntry>) {
-        if (list.isEmpty() || remote) return
+        if (list.isEmpty()) return
         clearSelection()
         vm.delete(list)
     }
@@ -173,7 +174,6 @@ class BrowserState(
     }
 
     fun transfer(list: List<FileEntry>, move: Boolean) {
-        if (move && remote) return
         if (list.isNotEmpty()) pendingTransfer = Transfer(move, list)
     }
 

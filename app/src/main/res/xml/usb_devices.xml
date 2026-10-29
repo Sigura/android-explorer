@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto-open (todo §9.8 item 6): Android offers the app when a camera (still-image class, PTP) is
+     plugged in. Phones in MTP mode use a vendor class named "MTP", which a filter can't name. -->
+<resources>
+    <usb-device class="6" />
+</resources>

@@ -62,6 +62,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.nio.charset.Charset
 
@@ -470,6 +471,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 path, viewModelScope, Sorting.comparator(spec), settings.value.showHidden,
                 scanner = if (remote) mtp::scan else com.mediaviewer.data.fs.FolderScanner::scan,
                 watch = !remote,
+                live = if (remote) mtp.watch(path, settings.value.showHidden) else null,
                 onFailed = ::onListingFailed,
             )
                 .also {
@@ -631,6 +633,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** New folder in the current folder, then opens it (todo §6.1). */
     fun createFolder(name: String, onError: (String) -> Unit) {
         val folder = _listing.value?.path ?: return
+        if (MtpPaths.isMtp(folder)) {
+            viewModelScope.launch {
+                try {
+                    openFolder(withContext(Dispatchers.IO) { mtp.mkdir(folder, name) })
+                } catch (e: java.io.IOException) {
+                    onError(e.message ?: "The device didn't create the folder")
+                }
+            }
+            return
+        }
         val dir = File(folder, name)
         viewModelScope.launch {
             when (val r = abandonable(TEXT_IO_TIMEOUT_MS) { TextFile.mkdir(dir) ?: "" }) {
@@ -739,7 +751,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * Deletes without a confirmation dialog; an "Undo" snackbar is shown for 5 s and the files are
      * only removed for good when it closes (README §6, item 3).
      */
-    fun delete(entries: List<FileEntry>, onRestored: (List<FileEntry>) -> Unit = {}) {
+    fun delete(all: List<FileEntry>, onRestored: (List<FileEntry>) -> Unit = {}) {
+        val (onDevice, entries) = all.partition { MtpPaths.isMtp(it.path) || mtp.isMirror(it.path) }
+        if (onDevice.isNotEmpty()) deleteOnDevice(onDevice, onRestored)
         if (entries.isEmpty()) return
         val listing = _listing.value
         viewModelScope.launch {
@@ -780,6 +794,67 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Delete on a device (todo §9.8 item 1), with the same 5 s *Undo* as local files: there is no
+     * trash on a device, so the files only leave the listing until the snackbar closes, and are
+     * deleted then. Files of a device slideshow (mirror copies) delete their device file and leave
+     * the parked device folder too. A failed delete is reported and the file comes back.
+     */
+    private fun deleteOnDevice(entries: List<FileEntry>, onRestored: (List<FileEntry>) -> Unit) {
+        val listing = _listing.value
+        val back = parked
+        class Held(val shown: FileEntry, val remote: String, val parkedEntry: FileEntry?)
+        val held = entries.mapNotNull { e ->
+            val remote = if (MtpPaths.isMtp(e.path)) e.path else mtp.remoteOf(e.path) ?: return@mapNotNull null
+            Held(e, remote, back?.snapshot()?.firstOrNull { it.path == remote })
+        }
+        if (held.isEmpty()) return
+        fun restore(list: List<Held>) = list.forEach { h ->
+            listing?.add(h.shown)
+            h.parkedEntry?.let { back?.add(it) }
+        }
+        held.forEach { h ->
+            listing?.remove(h.shown.path)
+            back?.remove(h.remote)
+        }
+        val text = if (held.size == 1) "Deleted ${held[0].shown.name}" else "Deleted ${held.size} files"
+        errors.message(
+            UiMessage(
+                text,
+                actionLabel = "Undo",
+                durationMs = 5000,
+                onAction = {
+                    restore(held)
+                    onRestored(held.map { it.shown })
+                },
+                onDismiss = {
+                    viewModelScope.launch {
+                        val failed = withContext(Dispatchers.IO) {
+                            held.filter { h ->
+                                try {
+                                    mtp.delete(h.remote)
+                                    false
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    errors.readError(h.remote, "Couldn't delete: ${e.message}", e)
+                                    true
+                                }
+                            }
+                        }
+                        if (failed.isEmpty()) return@launch
+                        restore(failed)
+                        errors.notify(
+                            if (failed.size == 1) "Couldn't delete ${failed[0].shown.name}" else "Couldn't delete ${failed.size} files",
+                            failed[0].remote,
+                            log = false,
+                        )
+                    }
+                },
+            ),
+        )
+    }
+
     // ------------------------------------------------------------------ move / copy
 
     /**
@@ -788,8 +863,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun transfer(entries: List<FileEntry>, destDir: String, move: Boolean) {
         if (entries.isEmpty()) return
-        if (entries.any { MtpPaths.isMtp(it.path) }) return importFromDevice(entries, destDir)
         val listing = _listing.value
+        if (MtpPaths.isMtp(destDir) || entries.any { MtpPaths.isMtp(it.path) }) {
+            // A device on either side (todo §9.5, §9.8 item 2); moved files leave the listing.
+            val moved = java.util.Collections.synchronizedList(ArrayList<String>())
+            copyWithSummary(destDir, entries.size, move, after = { moved.forEach { listing?.remove(it) } }) { progress ->
+                mtp.transfer(entries, destDir, move, progress) { moved.add(it) }
+            }
+            return
+        }
         copyWithSummary(destDir, entries.size, move, after = {
             if (move) entries.forEach { e -> if (!File(e.path).exists()) listing?.remove(e.path) }
         }) { progress -> FileOps.transfer(entries.map { it.path }, destDir, move, progress) }
@@ -898,9 +980,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             job = viewModelScope.launch {
                 val local = try {
                     withContext(Dispatchers.IO) {
-                        val dir = mtp.mirrorOf(l.path) ?: return@withContext null
-                        if (mtp.mirrorBytes() > MtpDevices.MIRROR_BUDGET) mtp.trimMirror(dir)
-                        mtp.fetch(entry) { done, total ->
+                        val dir = mtp.mirror.of(l.path) ?: return@withContext null
+                        mtp.mirror.makeRoomFor(dir)
+                        mtp.mirror.fetch(entry) { done, total ->
                             if (total > 0) viewModelScope.launch { updateBusy(id, "Loading ${entry.name}…", done.toFloat() / total) }
                         }
                     }
@@ -934,21 +1016,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefetchJob?.cancel()
         prefetchJob = viewModelScope.launch(Dispatchers.IO) {
             l.status.first { it != FolderListing.Status.LOADING }
-            val media = l.snapshot().filter { it.isMedia }
-            val i = media.indexOfFirst { it.path == start.path }
-            val queue = if (i < 0) media else media.drop(i + 1) + media.take(i)
-            var bytes = mtp.mirrorBytes()
-            for (e in queue) {
-                if (bytes + e.size > MtpDevices.MIRROR_BUDGET) break
-                try {
-                    mtp.fetch(e) ?: break
-                    bytes += e.size
-                } catch (ex: kotlinx.coroutines.CancellationException) {
-                    throw ex
-                } catch (ex: Exception) {
-                    errors.readError(e.path, ex.message ?: "read error", ex)
-                    if (!mtp.isConnected(e.path)) break
-                }
+            mtp.mirror.prefetch(l.snapshot().filter { it.isMedia }, start) { e, ex ->
+                errors.readError(e.path, ex.message ?: "read error", ex)
+                mtp.isConnected(e.path)
             }
         }
     }
@@ -967,28 +1037,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _screen.value = Screen.Folder(back.path)
     }
 
-    /** "Copy to…" from a device (todo §9.5): files and folders, with progress and Stop. */
-    private fun importFromDevice(entries: List<FileEntry>, destDir: String) {
-        var job: Job? = null
-        setBusy("Copying…", onStop = { job?.cancel() }) {
-            val id = _busy.value?.id ?: 0L
-            var n = 0
-            job = viewModelScope.launch(Dispatchers.IO) {
-                val r = mtp.importTo(entries, File(destDir)) { name ->
-                    n++
-                    viewModelScope.launch { updateBusy(id, "Copying $n: $name", null) }
-                }
-                withContext(Dispatchers.Main) {
-                    val name = destDir.substringAfterLast('/')
-                    if (r.failed.isEmpty()) {
-                        errors.notify("Copied ${r.done} to $name", log = false)
-                    } else {
-                        r.failed.forEach { (p, why) -> errors.readError(p, why) }
-                        errors.notify("${r.failed.size} of ${entries.size} couldn't be copied: ${r.failed[0].second}", r.failed[0].first)
-                    }
-                }
-            }
-            job?.join()
+    /**
+     * Android opened the app for a camera just plugged in (todo §9.8 item 6), which also granted
+     * access. Once the device is ready, a single storage opens in the folder view; several, or a
+     * device that can't be opened, show the home screen with its *Devices* section. A slideshow or
+     * the editor is left alone.
+     */
+    fun deviceAttached(id: Int) {
+        mtp.refresh()
+        viewModelScope.launch {
+            _ready.first { it }
+            val d = withTimeoutOrNull(DEVICE_OPEN_WAIT_MS) {
+                devices.first { list -> list.any { it.id == id && (it.state == MtpDevices.State.READY || it.state == MtpDevices.State.FAILED) } }
+            }?.firstOrNull { it.id == id }
+            val s = _screen.value
+            if (s !is Screen.Root && s !is Screen.Folder) return@launch
+            val storage = d?.storages?.singleOrNull()
+            if (d?.state == MtpDevices.State.READY && storage != null) openFolder(storage.path) else goRoot()
         }
     }
 
@@ -1000,7 +1065,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         setBusy("Loading ${entry.name}…", onStop = { job?.cancel() }) {
             job = viewModelScope.launch {
                 val local = try {
-                    withContext(Dispatchers.IO) { mtp.fetch(entry) }
+                    withContext(Dispatchers.IO) { mtp.mirror.fetch(entry) }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1023,6 +1088,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         const val AVAILABILITY_TIMEOUT_MS = 400L
+
+        /** How long a plugged-in device may take to open before the home screen shows it instead. */
+        private const val DEVICE_OPEN_WAIT_MS = 15_000L
 
         /** Reading or writing a text file of up to 10 MB; a hung USB drive is given up after this. */
         const val TEXT_IO_TIMEOUT_MS = 20_000L

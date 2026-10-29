@@ -32,7 +32,8 @@ class MediaViewerApp : Application(), SingletonImageLoader.Factory {
     val meta by lazy { MetaStore(this) }
     val thumbnails by lazy {
         Thumbnails(meta, errors).also {
-            it.remote = { path -> mtp.thumbnail(path) }
+            it.remote = { entry -> mtp.thumbnail(entry) }
+            it.remoteFolder = { path -> mtp.folderPreview(path) }
             it.packageManager = packageManager
             it.contentResolver = contentResolver
         }

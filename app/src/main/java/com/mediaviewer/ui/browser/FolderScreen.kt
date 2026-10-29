@@ -261,6 +261,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
         FolderPicker(
             // From a device (todo §9.5): start in the last local folder.
             vm, if (remote) vm.settingsStore.recent.value.firstOrNull { !MtpPaths.isMtp(it.path) }?.path ?: volumes.firstOrNull()?.path ?: "/" else listing.path, t.move,
+            from = listing.path,
             onPick = { dest ->
                 browser.pendingTransfer = null
                 browser.clearSelection()
@@ -372,7 +373,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                     ev.key == Key.Minus || ev.key == Key.NumPadSubtract -> zoom(-1).let { true }
                     ev.key == Key.Backspace || (ev.isAltPressed && ev.key == Key.DirectionLeft) -> vm.goUp().let { true }
                     ev.key == Key.Comma -> vm.showOverlay(Overlay.SETTINGS).let { true }
-                    ev.key == Key.N && !ev.isCtrlPressed && !browser.selectionMode && !remote -> {
+                    ev.key == Key.N && !ev.isCtrlPressed && !browser.selectionMode && (!remote || ev.isShiftPressed) -> {
                         newItem = if (ev.isShiftPressed) NewItem.FOLDER else NewItem.FILE
                         true
                     }
@@ -703,11 +704,9 @@ private fun TopBar(
                     TipIconButton("More", onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         Item("Sort…", Icons.AutoMirrored.Rounded.Sort) { sort.onOpen(true) }
-                        if (!remote) {
-                            Item("New text file", Icons.AutoMirrored.Rounded.NoteAdd) { onNew(NewItem.FILE) }
-                            Item("New folder", Icons.Rounded.CreateNewFolder) { onNew(NewItem.FOLDER) }
-                            Item(favLabel, favIcon) { vm.toggleFavourite(path) }
-                        }
+                        if (!remote) Item("New text file", Icons.AutoMirrored.Rounded.NoteAdd) { onNew(NewItem.FILE) }
+                        Item("New folder", Icons.Rounded.CreateNewFolder) { onNew(NewItem.FOLDER) }
+                        if (!remote) Item(favLabel, favIcon) { vm.toggleFavourite(path) }
                         Item("Settings", Icons.Rounded.Settings) { vm.showOverlay(Overlay.SETTINGS) }
                         if (lecture != null) {
                             HorizontalDivider()
@@ -735,6 +734,10 @@ private fun TopBar(
                 }
                 TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             } else {
+                // Device folders (todo §9.8 item 2): only folders can be made there.
+                TipIconButton("New folder (Shift+N)", onClick = { onNew(NewItem.FOLDER) }) {
+                    Icon(Icons.Rounded.CreateNewFolder, contentDescription = "New folder")
+                }
                 TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             }
         }
@@ -828,15 +831,11 @@ private fun SelectionBar(browser: BrowserState, remote: Boolean) {
             Text("${browser.selection.size} selected", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             TipIconButton("Select all (Ctrl+A)", onClick = browser::selectAll) { Icon(Icons.AutoMirrored.Rounded.PlaylistAddCheck, contentDescription = "Select all") }
             TipIconButton("Invert selection", onClick = browser::invert) { Icon(Icons.Rounded.SwapHoriz, contentDescription = "Invert selection") }
-            if (remote) {
-                // Device folders (todo §9.5): copying to this phone is the only action.
-                TipIconButton("Copy to…", onClick = { browser.transfer(browser.selectedEntries(), false) }) {
-                    Icon(Icons.AutoMirrored.Rounded.DriveFileMove, contentDescription = "Copy to…")
+            // Device folders (todo §9): no share, the files aren't on this phone.
+            if (!remote) {
+                TipIconButton("Share", onClick = { browser.share(browser.selectedEntries()) }) {
+                    Icon(Icons.Rounded.Share, contentDescription = "Share")
                 }
-                return@Row
-            }
-            TipIconButton("Share", onClick = { browser.share(browser.selectedEntries()) }) {
-                Icon(Icons.Rounded.Share, contentDescription = "Share")
             }
             var menu by remember { mutableStateOf(false) }
             Box {

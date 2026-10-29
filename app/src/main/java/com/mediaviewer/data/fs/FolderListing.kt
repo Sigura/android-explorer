@@ -30,9 +30,17 @@ class FolderListing(
     /** Folders on MTP devices (todo §9) are listed by the device connection and not watched. */
     private val scanner: (String, Boolean) -> Flow<FolderScanner.Event> = FolderScanner::scan,
     private val watch: Boolean = true,
+    /** Live updates from elsewhere than a folder watcher: device events (todo §9.8 item 3). */
+    private val live: Flow<Change>? = null,
     private val onFailed: (path: String, reason: String) -> Unit,
 ) {
     enum class Status { LOADING, DONE, STOPPED, FAILED }
+
+    /** A live update: [Added] replaces an entry with the same path. */
+    sealed interface Change {
+        data class Added(val entry: FileEntry) : Change
+        data class Removed(val path: String) : Change
+    }
 
     private val lock = Any()
     private var comparator: Comparator<FileEntry> = comparator
@@ -57,6 +65,7 @@ class FolderListing(
     val hasImages: StateFlow<Boolean> = _hasImages.asStateFlow()
 
     private var job: Job? = null
+    private var liveJob: Job? = null
     private var observer: FileObserver? = null
 
     fun start() {
@@ -78,6 +87,19 @@ class FolderListing(
             if (_status.value == Status.LOADING) _status.value = Status.DONE
         }
         if (watch) startWatching()
+        if (live != null && liveJob == null) {
+            liveJob = scope.launch(Dispatchers.Default) {
+                live.collect { ch ->
+                    when (ch) {
+                        is Change.Added -> {
+                            remove(ch.entry.path)
+                            add(ch.entry)
+                        }
+                        is Change.Removed -> remove(ch.path)
+                    }
+                }
+            }
+        }
     }
 
     /** Stop button: keep what is loaded (README §2.1, "Folder listing"). Returns immediately. */
@@ -91,6 +113,8 @@ class FolderListing(
 
     fun close() {
         job?.cancel()
+        liveJob?.cancel()
+        liveJob = null
         observer?.stopWatching()
         observer = null
     }
