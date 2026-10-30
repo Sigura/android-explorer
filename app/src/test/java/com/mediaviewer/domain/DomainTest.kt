@@ -54,6 +54,15 @@ class SlideTimingTest {
         assertTrue(SlideTimer.timing(21_001, r).longerThanInterval)
         assertEquals(r, SlideTimer.timing(null, r).showMs)
     }
+
+    @Test fun revisitGetsFullTimeAndLoops() {
+        // Back / Next to an item seen before: the video goes on from its position, so it loops
+        // rather than ending (and moving on) before the item's full time has passed.
+        assertEquals(SlideTiming(20_000, loop = true, longerThanInterval = false), SlideTimer.timing(20_000, r, revisit = true))
+        assertEquals(SlideTiming(152_000, loop = true, longerThanInterval = true), SlideTimer.timing(152_000, r, revisit = true))
+        assertEquals(SlideTimer.timing(600, r), SlideTimer.timing(600, r, revisit = true))
+        assertEquals(SlideTimer.timing(null, r), SlideTimer.timing(null, r, revisit = true))
+    }
 }
 
 class NaturalOrderTest {

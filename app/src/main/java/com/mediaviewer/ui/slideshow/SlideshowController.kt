@@ -123,6 +123,8 @@ class SlideshowController(
     private var tickJob: Job? = null
     /** The app is not visible: the clock stops and nothing is skipped as "not ready". */
     private var stopped = false
+    /** The current item went on from where it was left (Back / Next): its timer, not its end, moves it on. */
+    private var revisit = false
     /** The item ended while paused, in the menu or in the background; it advances when the timer runs again. */
     private var endedInMenu = false
     /** Items being prepared ahead (next, previous, a manual step's target), by path; the oldest is dropped. */
@@ -356,7 +358,8 @@ class SlideshowController(
             saveListened(old)
         }
         // An item that was shown to its end, or nearly, starts over instead of flashing by. One
-        // it goes on with keeps its video / GIF position, but gets a full R again: the clock restarts.
+        // it goes on with keeps its video / GIF position, but gets its full time again: the clock
+        // restarts, and a video that plays once loops at its end instead of moving on early.
         val visit = nav.resume(e.path)
         if (visit != null) Log.d(TAG, "Slideshow: back to ${e.name} at ${visit.elapsedMs} ms, position ${visit.positionMs} ms")
         val firstShow = generation == 0
@@ -369,6 +372,7 @@ class SlideshowController(
         meta = null
         tickToken++
         endedInMenu = false
+        revisit = visit != null
         elapsedMs = 0L
         runningSince = -1
         resumePositionMs = when {
@@ -389,7 +393,7 @@ class SlideshowController(
                 } catch (ex: Exception) {
                     null
                 }
-                if (current === e && ready) timing = SlideTimer.timing(meta?.durationMs, intervalMs())
+                if (current === e && ready) timing = timingOf(meta?.durationMs)
             }
         }
     }
@@ -497,6 +501,8 @@ class SlideshowController(
 
     fun intervalMs(): Long = vm.settings.value.intervalSec * 1000L
 
+    private fun timingOf(durationMs: Long?): SlideTiming = SlideTimer.timing(durationMs, intervalMs(), revisit)
+
     /** README §6: a new R applies at once, also to the item on screen. */
     fun onIntervalChanged() {
         val e = current ?: return
@@ -505,7 +511,7 @@ class SlideshowController(
             MediaType.VIDEO, MediaType.ANIMATED -> meta?.durationMs?.takeIf { it > 0 }
             else -> null
         }
-        timing = SlideTimer.timing(d, intervalMs())
+        timing = timingOf(d)
     }
 
     /** The display reports the item is on screen. For video, [durationMs] comes from the player. */
@@ -518,20 +524,20 @@ class SlideshowController(
         when (e.type) {
             MediaType.VIDEO -> {
                 meta = MediaMeta(width, height, 0, durationMs ?: 0)
-                timing = SlideTimer.timing(durationMs, intervalMs())
+                timing = timingOf(durationMs)
             }
             MediaType.ANIMATED -> {
                 if (meta == null) meta = MediaMeta(width, height, 0, 0)
                 // The duration comes from the block scan; until then the GIF just plays.
-                if (meta?.durationMs != null && meta!!.durationMs > 0) timing = SlideTimer.timing(meta!!.durationMs, intervalMs())
+                if (meta?.durationMs != null && meta!!.durationMs > 0) timing = timingOf(meta!!.durationMs)
                 else scope.launch {
                     delay(3000)
-                    if (current === e && timing == null) timing = SlideTimer.timing(null, intervalMs())
+                    if (current === e && timing == null) timing = timingOf(null)
                 }
             }
             else -> {
                 meta = MediaMeta(width, height, 1, 0)
-                timing = SlideTimer.timing(null, intervalMs())
+                timing = timingOf(null)
             }
         }
         preloadNext(video = false)
