@@ -355,7 +355,8 @@ class SlideshowController(
             if (t != null) nav.leave(old.path, shownMs(), t.showMs, positionOf(old))
             saveListened(old)
         }
-        // An item that was shown to its end, or nearly, starts over instead of flashing by.
+        // An item that was shown to its end, or nearly, starts over instead of flashing by. One
+        // it goes on with keeps its video / GIF position, but gets a full R again: the clock restarts.
         val visit = nav.resume(e.path)
         if (visit != null) Log.d(TAG, "Slideshow: back to ${e.name} at ${visit.elapsedMs} ms, position ${visit.positionMs} ms")
         val firstShow = generation == 0
@@ -368,7 +369,7 @@ class SlideshowController(
         meta = null
         tickToken++
         endedInMenu = false
-        elapsedMs = visit?.elapsedMs ?: 0L
+        elapsedMs = 0L
         runningSince = -1
         resumePositionMs = when {
             visit != null -> visit.positionMs

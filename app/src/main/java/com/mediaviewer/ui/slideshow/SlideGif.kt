@@ -10,10 +10,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.mediaviewer.data.thumbs.GifCodec
 import com.mediaviewer.data.thumbs.GifFormatException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -25,7 +29,7 @@ import kotlin.coroutines.coroutineContext
  * are decoded with [GifCodec.FrameReader] off the main thread into two bitmaps used in turn.
  */
 @Stable
-class SlideGif(private val file: File, private val startMs: Long) {
+class SlideGif(val file: File, val startMs: Long) {
     enum class State { LOADING, PLAYING, UNSUPPORTED, FAILED }
 
     var state by mutableStateOf(State.LOADING)
@@ -41,6 +45,20 @@ class SlideGif(private val file: File, private val startMs: Long) {
 
     /** False while the slideshow is paused: the frame on screen stays. */
     val running = MutableStateFlow(true)
+
+    private var job: Job? = null
+
+    /** Still decoding its first frame. */
+    val loading: Boolean get() = state == State.LOADING && job?.isActive == true
+
+    /** Plays in [scope] until [stop], unless it already does: a GIF prepared ahead plays on in its slide. */
+    fun start(scope: CoroutineScope) {
+        if (job == null) job = scope.launch { play() }
+    }
+
+    fun stop() {
+        job?.cancel()
+    }
 
     /** Plays until cancelled. A file that isn't a GIF, or is too big, ends as [State.UNSUPPORTED]. */
     suspend fun play() = withContext(Dispatchers.Default) {
@@ -119,5 +137,40 @@ class SlideGif(private val file: File, private val startMs: Long) {
     private companion object {
         /** Two ARGB frames of up to 4 MP (32 MB); bigger GIFs are left to the platform decoder. */
         const val MAX_PIXELS = 4_000_000L
+    }
+}
+
+/**
+ * GIFs got ready for a step (todo §11.1): decoded up to the frame they start on and held there, so
+ * the slide moves in with its picture instead of an empty frame. The slide takes its GIF from here
+ * ([take]); ones never shown are dropped, the oldest first. Main thread only.
+ */
+class PreparedGifs(private val scope: CoroutineScope) {
+    private val gifs = LinkedHashMap<String, SlideGif>()
+
+    /** Decodes [path] from [startMs] up to its first frame; returns once it is shown or can't be. */
+    suspend fun prepare(path: String, file: File, startMs: Long) {
+        val gif = gifs[path]?.takeIf { it.file == file && it.startMs == startMs } ?: SlideGif(file, startMs).also { g ->
+            gifs.remove(path)?.stop()
+            g.running.value = false
+            g.start(scope)
+            gifs[path] = g
+            while (gifs.size > MAX) gifs.remove(gifs.keys.first())?.stop()
+        }
+        while (gif.loading) delay(POLL_MS)
+    }
+
+    /** The GIF prepared for [path] from [startMs], now the slide's; null when there is none. */
+    fun take(path: String, file: File, startMs: Long): SlideGif? {
+        val g = gifs.remove(path) ?: return null
+        if (g.file == file && g.startMs == startMs) return g
+        g.stop()
+        return null
+    }
+
+    private companion object {
+        /** Next, previous and a manual step's target. */
+        const val MAX = 3
+        const val POLL_MS = 20L
     }
 }

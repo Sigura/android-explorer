@@ -80,8 +80,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ErrorResult
@@ -112,6 +110,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     var slideSize by remember { mutableStateOf(IntSize.Zero) }
     /** GIFs on screen (two during a transition), so the one being left can say where it was. */
     val gifs = remember { HashMap<String, SlideGif>() }
+    val gifsAhead = remember { PreparedGifs(scope) }
     val players = remember {
         SlidePlayers {
             // Platform decoders first; the bundled FFmpeg extension when the device has none.
@@ -154,8 +153,9 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
                     if (size == IntSize.Zero) null
                     else (SingletonImageLoader.get(ctx).execute(slideRequest(ctx, file, size)) as? ErrorResult)?.let { it.throwable.message ?: "can't decode" }
                 }
-                // The block scan reads the whole file; the slide then decodes from the cache. A
-                // file that isn't a GIF inside still has the platform decoder, so no failure here.
+                // The block scan reads the whole file; then the GIF is decoded up to the frame it
+                // starts on, so its slide doesn't move in empty. A file that isn't a GIF inside
+                // still has the platform decoder, so no failure here.
                 MediaType.ANIMATED -> {
                     val file = c.localFile(e)
                     try {
@@ -164,6 +164,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
                         throw ex
                     } catch (ex: Exception) {
                     }
+                    if (e.size <= vm.thumbnails.largeGifBytes) gifsAhead.prepare(e.path, file, positionMs)
                     null
                 }
                 MediaType.VIDEO -> players.prepare(c.videoUri(e), e.path, positionMs)
@@ -218,6 +219,9 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     LaunchedEffect(c.generation) {
         val e = current
         if (e == null || e.type != MediaType.VIDEO) {
+            // The video being left stays on its frame while its slide moves out, then its player stops.
+            players.current.pause()
+            delay(TRANSITION_END_MS)
             players.stopCurrent()
             return@LaunchedEffect
         }
@@ -317,8 +321,12 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             transitionSpec = { transitionFor(settings.transition, c.direction) },
             label = "slide",
         ) { e ->
-            // The image is decoded for the slide's size, so it waits for the first layout.
-            if (e != null && slideSize != IntSize.Zero) Slide(e, c, players, zoom, gifs, vm.thumbnails.largeGifBytes, slideSize)
+            // Always the full size, also before its picture is there: AnimatedContent animates its
+            // size to the incoming slide's, and an empty one would squeeze the slide going out.
+            Box(Modifier.fillMaxSize()) {
+                // The image is decoded for the slide's size, so it waits for the first layout.
+                if (e != null && slideSize != IntSize.Zero) Slide(e, c, players, zoom, gifs, gifsAhead, vm.thumbnails.largeGifBytes, slideSize)
+            }
         }
         val t = c.timing
         if (t != null && !c.single && current != null) {
@@ -489,6 +497,9 @@ private fun handleKey(c: SlideshowController, key: Key, type: KeyEventType, inve
     }
 }
 
+/** Transitions take up to 300 ms; a video slide going out keeps its player until then. */
+private const val TRANSITION_END_MS = 400L
+
 private fun transitionFor(t: Transition, dir: Int): ContentTransform = when (t) {
     Transition.NONE -> EnterTransition.None togetherWith ExitTransition.None
     Transition.FADE -> fadeIn(tween(250)) togetherWith fadeOut(tween(250))
@@ -503,6 +514,7 @@ private fun Slide(
     players: SlidePlayers,
     zoom: ZoomState,
     gifs: MutableMap<String, SlideGif>,
+    gifsAhead: PreparedGifs,
     largeGifBytes: Long,
     size: IntSize,
 ) {
@@ -520,15 +532,8 @@ private fun Slide(
             // The player that holds this video: it may change hands while the slide is on screen.
             val player = players.playerFor(e.path)
             AndroidView(
-                factory = { context ->
-                    PlayerView(context).apply {
-                        useController = false
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        setShutterBackgroundColor(android.graphics.Color.BLACK)
-                        this.player = player
-                    }
-                },
-                update = { if (it.player !== player) it.player = player },
+                factory = { context -> SlideVideoView(context).also { it.player = player } },
+                update = { it.player = player },
                 onRelease = { it.player = null },
                 modifier = zoomMod,
             )
@@ -549,19 +554,27 @@ private fun Slide(
             val f = file ?: return
             // GIFs play with the app's own decoder, which can start where the GIF was left and pause
             // on a frame; very large ones, and files that aren't GIFs inside, use the platform's.
+            // A GIF got ready for the step is already on its first frame.
             val gif = remember(e.path, f) {
-                if (e.type == MediaType.ANIMATED && e.size <= largeGifBytes) SlideGif(f, c.resumePositionMs) else null
+                if (e.type == MediaType.ANIMATED && e.size <= largeGifBytes) {
+                    gifsAhead.take(e.path, f, c.resumePositionMs) ?: SlideGif(f, c.resumePositionMs)
+                } else {
+                    null
+                }
             }
             if (gif != null && gif.state != SlideGif.State.UNSUPPORTED) {
                 PlayedGif(e, gif, c, gifs, zoomMod)
             } else {
                 val request = remember(e.path, f) { slideRequest(ctx, f, size) }
+                var loaded by remember(e.path, f) { mutableStateOf<IntSize?>(null) }
+                // A slide brought back while it was still moving out doesn't load again: it reports what it has.
+                LaunchedEffect(loaded, c.generation) { loaded?.let { c.onReady(e, null, it.width, it.height) } }
                 AsyncImage(
                     model = request,
                     contentDescription = e.name,
                     contentScale = ContentScale.Fit,
                     modifier = zoomMod,
-                    onSuccess = { s -> c.onReady(e, null, s.result.image.width, s.result.image.height) },
+                    onSuccess = { s -> loaded = IntSize(s.result.image.width, s.result.image.height) },
                     onError = { s -> c.onFailed(e, s.result.throwable.message ?: "can't decode") },
                 )
             }
@@ -579,14 +592,19 @@ private fun slideRequest(ctx: android.content.Context, file: File, size: IntSize
 
 @Composable
 private fun PlayedGif(e: FileEntry, gif: SlideGif, c: SlideshowController, gifs: MutableMap<String, SlideGif>, modifier: Modifier) {
+    val scope = rememberCoroutineScope()
     DisposableEffect(gif) {
         gifs[e.path] = gif
-        onDispose { if (gifs[e.path] === gif) gifs.remove(e.path) }
+        gif.start(scope)
+        onDispose {
+            gif.stop()
+            if (gifs[e.path] === gif) gifs.remove(e.path)
+        }
     }
-    LaunchedEffect(gif) { gif.play() }
     // Paused, the GIF stays on its frame and goes on from there.
     LaunchedEffect(gif, c.paused) { gif.running.value = !c.paused }
-    LaunchedEffect(gif.state) {
+    // Also when the slide is brought back while it was still moving out: it isn't started again.
+    LaunchedEffect(gif.state, c.generation) {
         when (gif.state) {
             SlideGif.State.PLAYING -> gif.frame?.let { c.onReady(e, null, it.width, it.height) }
             SlideGif.State.FAILED -> c.onFailed(e, gif.error ?: "can't decode")

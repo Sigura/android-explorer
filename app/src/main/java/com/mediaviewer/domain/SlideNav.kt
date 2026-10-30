@@ -4,8 +4,9 @@ package com.mediaviewer.domain
  * Manual Next / Previous in the slideshow (todo §11.1): what to show and when.
  *
  * - **Where items were left:** the last [maxVisits] items remember their elapsed time, show time
- *   and video / GIF position, so going back *or forward* to one goes on from there; an item left
- *   with less than [minLeftMs] to go starts over instead of flashing by.
+ *   and video / GIF position, so going back *or forward* to one goes on from that position (its
+ *   timer starts over, with the full time); an item left with less than [minLeftMs] to go starts
+ *   over instead of flashing by.
  * - **Waiting for the target:** a manual step keeps the item on screen until its target is ready.
  *   A second press the same way moves the target one step further; the opposite press cancels the
  *   wait; a target that fails to load is skipped (the target moves on the same way).
