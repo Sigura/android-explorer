@@ -18,6 +18,7 @@ import com.mediaviewer.MediaViewerApp
 import com.mediaviewer.data.history.BookFolder
 import com.mediaviewer.data.history.FileHistory
 import com.mediaviewer.data.history.ResumePoint
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.tags.TrackExtras
 import com.mediaviewer.data.tags.TrackExtrasLoader
 import com.mediaviewer.domain.BookTimes
@@ -441,7 +442,7 @@ class BookPlayer(private val app: MediaViewerApp) {
             _state.value = null
             return
         }
-        val folder = File(item.mediaId).parent ?: ""
+        val folder = BookFolder.parentOf(item.mediaId) ?: ""
         if (_state.value?.folder != folder) loadMusicMode(folder)
         _state.value = NowPlaying(
             path = item.mediaId,
@@ -514,6 +515,8 @@ class BookPlayer(private val app: MediaViewerApp) {
             var published = System.currentTimeMillis()
             paths.forEachIndexed { i, path ->
                 if (durations[i] != null) return@forEachIndexed
+                // Device files (todo §11.4) would need a download: no duration until played.
+                if (MtpPaths.isMtp(path)) return@forEachIndexed
                 durations[i] = try {
                     val f = File(path)
                     val entry = FileEntry(path, f.name, MediaType.OTHER, f.length(), f.lastModified(), OtherKind.AUDIO)

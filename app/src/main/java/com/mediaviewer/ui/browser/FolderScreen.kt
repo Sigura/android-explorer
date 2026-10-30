@@ -430,7 +430,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
         // Drop files from other apps into this folder (todo §10.5); MTP folders are read-only.
         var dropHover by remember { mutableStateOf(false) }
         val drop = remember(listing.path) {
-            FileDrop(ctx as? Activity, onHover = { dropHover = it }) { uris, release -> vm.importDropped(uris, listing.path, release) }
+            FileDrop(ctx as? Activity, onHover = { dropHover = it }) { uris, shift, release -> vm.importDropped(uris, listing.path, shift, release) }
         }
         CompositionLocalProvider(LocalTileConfig provides cfg) {
             LazyVerticalGrid(
@@ -456,7 +456,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
                         e, browser, gate, requestFocus = e.path == focusTarget, playing = e.path == playingPath,
                         listen = if (e.type == MediaType.FOLDER) listenStatus(e.path, nowPlaying, books) else null,
                         // Files dragged from other apps onto a folder tile go into that folder (todo §10.10).
-                        onDropInto = if (e.type == MediaType.FOLDER && !remote) { uris, release -> vm.importDropped(uris, e.path, release) } else null,
+                        onDropInto = if (e.type == MediaType.FOLDER && !remote) { uris, shift, release -> vm.importDropped(uris, e.path, shift, release) } else null,
                         onPlay = if (e.type == MediaType.FOLDER && !remote) { show ->
                             // The book playing: ▶ pauses and plays it (a long press shows the player); any other starts or continues.
                             when {
@@ -685,6 +685,8 @@ private fun TopBar(
                 }
             }
             val fav = path in favourites
+            // A device that is remembered by its serial number can have favourites (todo §11.4).
+            val canFav = !remote || MtpPaths.isRememberedPath(path)
             val favLabel = if (fav) "Remove favourite" else "Add favourite"
             val favIcon = if (fav) Icons.Rounded.Star else Icons.Rounded.StarBorder
             var menu by remember { mutableStateOf(false) }
@@ -706,7 +708,7 @@ private fun TopBar(
                         Item("Sort…", Icons.AutoMirrored.Rounded.Sort) { sort.onOpen(true) }
                         if (!remote) Item("New text file", Icons.AutoMirrored.Rounded.NoteAdd) { onNew(NewItem.FILE) }
                         Item("New folder", Icons.Rounded.CreateNewFolder) { onNew(NewItem.FOLDER) }
-                        if (!remote) Item(favLabel, favIcon) { vm.toggleFavourite(path) }
+                        if (canFav) Item(favLabel, favIcon) { vm.toggleFavourite(path) }
                         Item("Settings", Icons.Rounded.Settings) { vm.showOverlay(Overlay.SETTINGS) }
                         if (lecture != null) {
                             HorizontalDivider()
@@ -738,6 +740,7 @@ private fun TopBar(
                 TipIconButton("New folder (Shift+N)", onClick = { onNew(NewItem.FOLDER) }) {
                     Icon(Icons.Rounded.CreateNewFolder, contentDescription = "New folder")
                 }
+                if (canFav) TipIconButton(favLabel, onClick = { vm.toggleFavourite(path) }) { Icon(favIcon, contentDescription = favLabel) }
                 TipIconButton("Settings ( , )", onClick = { vm.showOverlay(Overlay.SETTINGS) }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             }
         }

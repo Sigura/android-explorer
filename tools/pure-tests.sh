@@ -41,7 +41,7 @@ rm -rf "$OUT"
   "$M"/domain/*.kt "$M/domain/model/FileEntry.kt" "$M/data/fs/FileTypes.kt" "$M/data/tags/MediaTags.kt" \
   "$M/data/thumbs/DocCovers.kt" "$M/data/thumbs/WebpAnim.kt" "$M/data/thumbs/ApngAnim.kt" \
   "$M/data/fs/FolderScanner.kt" "$M/data/fs/FileOps.kt" \
-  "$M/data/mtp/MtpPaths.kt" "$M/data/mtp/MtpDriver.kt" "$M/data/mtp/MtpConnection.kt" "$M/data/mtp/MtpMirror.kt" "$M/data/mtp/MtpTransfer.kt" \
+  "$M/data/mtp/MtpPaths.kt" "$M/data/mtp/MtpDriver.kt" "$M/data/mtp/MtpConnection.kt" "$M/data/mtp/MtpMirror.kt" "$M/data/mtp/MtpTransfer.kt" "$M/data/mtp/MtpStream.kt" \
   "$T"/domain/*.kt "$T/data/MediaTagsTest.kt" "$T/data/PreviewTest.kt" "$T/data/ApngAnimTest.kt" "$T/data/WebpAnimTest.kt" "$T/data/FileTypesTest.kt" \
   "$T/data/MtpPathsTest.kt" "$T"/data/mtp/*.kt
 CLASSES=$(cd "$OUT" && find . -name '*Test.class' ! -name '*$*' | sed 's|^\./||; s|\.class$||; s|/|.|g')

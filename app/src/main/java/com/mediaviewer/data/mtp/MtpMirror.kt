@@ -4,6 +4,8 @@ import android.util.Log
 import com.mediaviewer.data.fs.TAG
 import com.mediaviewer.domain.model.FileEntry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 
@@ -26,16 +28,22 @@ class MtpMirror(
     fun remoteOf(localPath: String): String? =
         if (!isMirror(localPath)) null else MtpPaths.fromMirrorRelative(localPath.removePrefix(root.path))
 
+    /** One lock per file: the slideshow and the download ahead may want the same file at once. */
+    private val locks = HashMap<String, Mutex>()
+
     /**
      * The local copy of [entry], downloaded now unless an earlier copy of the same size is there.
-     * Returns null when the device is gone.
+     * A file already being downloaded is waited for, not downloaded twice. Returns null when the
+     * device is gone.
      */
     suspend fun fetch(entry: FileEntry, onProgress: (done: Long, total: Long) -> Unit = { _, _ -> }): File? {
         val c = connection(entry.path) ?: return null
         val dest = of(entry.path) ?: return null
-        if (dest.isFile && dest.length() == entry.size) return dest
-        c.download(entry.path, dest, onProgress)
-        return dest
+        val lock = synchronized(locks) { locks.getOrPut(entry.path) { Mutex() } }
+        return lock.withLock {
+            if (!(dest.isFile && dest.length() == entry.size)) c.download(entry.path, dest, onProgress)
+            dest
+        }
     }
 
     /** Bytes in the mirror. */
@@ -59,8 +67,8 @@ class MtpMirror(
         of(path)?.deleteRecursively()
     }
 
-    fun clear(deviceId: Int? = null) {
-        (if (deviceId == null) root else File(root, deviceId.toString())).deleteRecursively()
+    fun clear(device: String? = null) {
+        (if (device == null) root else File(root, device)).deleteRecursively()
     }
 
     /**

@@ -23,6 +23,14 @@ class AndroidMtpDriver(private val device: MtpDevice, private val usb: UsbDevice
         }
     }
 
+    override val canReadPartially64: Boolean by lazy {
+        try {
+            device.deviceInfo?.isOperationSupported(MtpConstants.OPERATION_GET_PARTIAL_OBJECT_64) == true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     override fun storageIds(): IntArray? = device.storageIds
 
     override fun storageInfo(id: Int): MtpDriver.StorageInfo? = device.getStorageInfo(id)?.let {
@@ -35,8 +43,10 @@ class AndroidMtpDriver(private val device: MtpDevice, private val usb: UsbDevice
 
     override fun thumbnail(handle: Int): ByteArray? = device.getThumbnail(handle)
 
+    // GetPartialObject takes a 32-bit offset; GetPartialObject64 the rest (todo §11.4).
     override fun readPartial(handle: Int, offset: Long, size: Long, buf: ByteArray): Long =
-        device.getPartialObject(handle, offset, size, buf)
+        if (offset + size > MAX_32 && canReadPartially64) device.getPartialObject64(handle, offset, size, buf)
+        else device.getPartialObject(handle, offset, size, buf)
 
     override fun importFile(handle: Int, dest: String): Boolean = device.importFile(handle, dest)
 
@@ -98,4 +108,8 @@ class AndroidMtpDriver(private val device: MtpDevice, private val usb: UsbDevice
     private fun info(i: MtpObjectInfo) = MtpDriver.ObjectInfo(
         i.objectHandle, i.storageId, i.parent, i.name, i.format, i.compressedSizeLong, i.dateModified, i.thumbCompressedSizeLong,
     )
+
+    private companion object {
+        const val MAX_32 = 0xFFFF_FFFFL
+    }
 }

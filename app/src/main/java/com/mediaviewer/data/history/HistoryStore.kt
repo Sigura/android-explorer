@@ -296,7 +296,8 @@ class HistoryStore(context: Context) : SQLiteOpenHelper(context, "history.db", n
             null,
             ContentValues().apply {
                 put("path", path)
-                put("size", java.io.File(path).length())
+                // A file on a camera or phone (todo §11.4) has no local size to read.
+                put("size", if (com.mediaviewer.data.mtp.MtpPaths.isMtp(path)) 0L else java.io.File(path).length())
                 put("position", 0)
                 put("finished", if (finished) 1 else 0)
                 put("played", System.currentTimeMillis())

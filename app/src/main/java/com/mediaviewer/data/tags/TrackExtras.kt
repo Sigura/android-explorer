@@ -7,6 +7,7 @@ import android.os.Build
 import com.mediaviewer.data.abandonable
 import com.mediaviewer.data.fs.FileTypes
 import com.mediaviewer.data.fs.FolderScanner
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.thumbs.TextDecode
 import com.mediaviewer.domain.Chapter
 import com.mediaviewer.domain.Chapters
@@ -41,6 +42,8 @@ object TrackExtrasLoader {
     private const val COVER_PX = 1024
 
     suspend fun load(path: String, durationMs: Long, legacyCharset: Charset): TrackExtras {
+        // A file on a camera or phone (todo §11.4) streams; its tags and neighbours aren't read.
+        if (MtpPaths.isMtp(path)) return TrackExtras(path, emptyList(), null, null, null)
         val file = File(path)
         val names = abandonable(READ_MS) { file.parentFile?.list()?.filterNot(FolderScanner::isHidden) } ?: emptyList()
         val chapters = abandonable(READ_MS) { chaptersOf(file, names, durationMs, legacyCharset) } ?: emptyList()
@@ -71,6 +74,7 @@ object TrackExtrasLoader {
      * the folder's cover image, decoded at about [px]. Null when there is none.
      */
     suspend fun cover(path: String, px: Int): Bitmap? {
+        if (MtpPaths.isMtp(path)) return null
         val file = File(path)
         val names = abandonable(READ_MS) { file.parentFile?.list()?.filterNot(FolderScanner::isHidden) } ?: emptyList()
         return coverOf(file, names, px)

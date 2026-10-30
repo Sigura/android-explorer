@@ -152,7 +152,8 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
                     if (settings.muted) "Unmute" else "Mute",
                 ) { vm.settingsStore.update { it.copy(muted = !it.muted) } }
                 MenuButton(Icons.Rounded.Info, "File info") { showInfo = !showInfo }
-                MenuAction(c, Icons.Rounded.Share, "Share") { e?.let { shareFiles(ctx, listOf(it)) } }
+                // Device files aren't on this phone to share (as in the folder view).
+                if (!c.onDevice) MenuAction(c, Icons.Rounded.Share, "Share") { e?.let { shareFiles(ctx, listOf(it)) } }
                 // 3. Delete without confirmation (undo snackbar).
                 MenuAction(c, Icons.Rounded.Delete, "Delete") { c.deleteCurrent() }
                 Spacer(Modifier.width(8.dp))

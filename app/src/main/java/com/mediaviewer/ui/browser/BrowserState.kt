@@ -79,6 +79,9 @@ class BrowserState(
             e.isFolder -> vm.openFolder(e.path)
             e.isMedia -> vm.openSlideshow(e)
             e.type == MediaType.PARTIAL || selectionMode -> Unit
+            // The book player streams from the device (todo §11.4); other apps get a copy.
+            e.type == MediaType.OTHER && e.other == OtherKind.AUDIO ->
+                vm.playAudio(e, orElse = { vm.openDeviceFileWith(e) { local -> ExternalApps.open(context, local, chooser = false) } })
             else -> vm.openDeviceFileWith(e) { local -> ExternalApps.open(context, local, chooser = false) }
         }
     }

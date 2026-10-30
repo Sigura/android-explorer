@@ -14,8 +14,11 @@ import androidx.compose.ui.draganddrop.toAndroidDragEvent
 internal class FileDrop(
     private val activity: Activity?,
     private val onHover: (Boolean) -> Unit,
-    /** The dropped URIs; call `release` when the copy is over, to give up the read permission. */
-    private val onDrop: (uris: List<Uri>, release: () -> Unit) -> Unit,
+    /**
+     * The dropped URIs and whether `Shift` was held (todo §11.3: own tiles move); call `release`
+     * when the copy is over, to give up the read permission.
+     */
+    private val onDrop: (uris: List<Uri>, shift: Boolean, release: () -> Unit) -> Unit,
 ) : DragAndDropTarget {
     override fun onEntered(event: DragAndDropEvent) = onHover(true)
 
@@ -31,11 +34,20 @@ internal class FileDrop(
         if (uris.isEmpty()) return false
         // Read access to content URIs of other apps lasts until release (or the activity ends).
         val perms = activity?.requestDragAndDropPermissions(ev)
-        onDrop(uris) { perms?.release() }
+        onDrop(uris, shiftHeld) { perms?.release() }
         return true
     }
 
     companion object {
+        /**
+         * `Shift` is held, as the app last saw it (todo §11.3). A drop event carries no key state,
+         * so `MainActivity` keeps this from key events and the meta state of mouse events, in every
+         * window of the app (one process); it is cleared when a window loses focus, since the
+         * release would go elsewhere. During a drag the keyboard focus stays with the window the
+         * drag started in, which is ours for our own tiles (**verify** on DeX).
+         */
+        @Volatile var shiftHeld = false
+
         private val TEXT = setOf(ClipDescription.MIMETYPE_TEXT_PLAIN, ClipDescription.MIMETYPE_TEXT_HTML, ClipDescription.MIMETYPE_TEXT_INTENT)
 
         /** A drag that may carry files: any MIME type besides plain text, HTML and intents. */

@@ -17,6 +17,7 @@ import com.mediaviewer.data.fs.FolderListing
 import com.mediaviewer.data.fs.FolderScanner
 import com.mediaviewer.data.fs.TAG
 import com.mediaviewer.data.fs.Volume
+import com.mediaviewer.data.settings.SettingsStore
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import kotlinx.coroutines.CoroutineScope
@@ -45,16 +46,19 @@ import java.util.concurrent.ConcurrentHashMap
  * into a mirror in the app's cache to be shown, since the slideshow, players and decoders all
  * read local files.
  */
-class MtpDevices(private val context: Context, private val scope: CoroutineScope) {
+class MtpDevices(private val context: Context, private val scope: CoroutineScope, private val settings: SettingsStore) {
     enum class State { NO_ACCESS, OPENING, READY, FAILED }
 
     data class Device(
+        /** The USB device id: this connection only. */
         val id: Int,
         val name: String,
         val state: State,
         val storages: List<Volume> = emptyList(),
         /** Why the device can't be browsed, or a hint ("Unlock the phone…"). */
         val message: String? = null,
+        /** Its key in paths (`MtpPaths.deviceKey`), known once it is open. */
+        val key: String? = null,
     )
 
     private val usb: UsbManager? = context.getSystemService(UsbManager::class.java)
@@ -62,9 +66,24 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
 
     private val connections = ConcurrentHashMap<Int, MtpConnection>()
+    /** USB device id → its key in paths (todo §11.4). */
+    private val keys = ConcurrentHashMap<Int, String>()
+    /** Devices asked for access by themselves already: once per plug (USB ids are new each time). */
+    private val asked: MutableSet<Int> = ConcurrentHashMap.newKeySet()
     private val storageWatch = ConcurrentHashMap<Int, Job>()
     private val openLock = Mutex()
     private var started = false
+
+    /**
+     * The app is on screen (todo §11.4): only then does a remembered device ask for access by
+     * itself when it is plugged in; otherwise the prompt would cover another app.
+     */
+    @Volatile var foreground = false
+        set(value) {
+            val came = value && !field
+            field = value
+            if (came) refresh()
+        }
 
     /** Local copies of device files: `cache/mtp/<device>/<storage>/<folders>/<name>`. */
     val mirror = MtpMirror(File(context.cacheDir, "mtp"), ::connection)
@@ -118,6 +137,17 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
             val ids = found.mapTo(HashSet()) { it.deviceId }
             connections.keys.filter { it !in ids }.forEach(::detached)
             val before = _devices.value.associateBy { it.id }
+            // A device seen before asks for access by itself, once per plug (todo §11.4): its folders
+            // on the home screen come back without a tap. Same maker and model is the best guess
+            // before access; the serial number can only be read after it.
+            val models = settings.settings.value.knownDevices.keys.mapNotNullTo(HashSet(), MtpPaths::modelOf)
+            if (foreground) {
+                found.filter { d -> !asked.contains(d.deviceId) && !m.hasPermission(d) && MtpPaths.modelPrefix(d.vendorId, d.productId) in models }
+                    .forEach {
+                        asked.add(it.deviceId)
+                        requestAccess(it.deviceId)
+                    }
+            }
             _devices.update { old ->
                 found.map { d ->
                     old.firstOrNull { it.id == d.deviceId }
@@ -156,32 +186,84 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
                     setState(dev.deviceId, State.FAILED, "In use by another app — close it, or unplug the device and plug it in again")
                     return@withLock
                 }
-                val c = MtpConnection(dev.deviceId, AndroidMtpDriver(mtp, conn))
+                val key = MtpPaths.deviceKey(dev.vendorId, dev.productId, serialOf(dev, mtp), dev.deviceId)
+                keys[dev.deviceId] = key
+                if (MtpPaths.isRemembered(key)) remember(key, nameOf(dev))
+                val c = MtpConnection(key, AndroidMtpDriver(mtp, conn))
                 connections[dev.deviceId] = c
-                if (!readStorages(c)) return@withLock
+                if (!readStorages(dev.deviceId, c)) return@withLock
                 c.startEvents()
                 storageWatch.put(dev.deviceId, scope.launch {
-                    c.changes.filter { it == MtpConnection.Change.Storages }.collect { readStorages(c) }
+                    c.changes.filter { it == MtpConnection.Change.Storages }.collect { readStorages(dev.deviceId, c) }
                 })?.cancel()
             }
         }
     }
 
+    /**
+     * The serial number that makes the device's key stable (todo §11.4): the USB one (readable
+     * only with access, API 29+), else the one in the MTP device info (cameras often have only that).
+     */
+    private fun serialOf(dev: UsbDevice, mtp: MtpDevice): String? {
+        val usbSerial = try {
+            dev.serialNumber
+        } catch (e: SecurityException) {
+            null
+        }
+        if (!usbSerial.isNullOrBlank()) return usbSerial
+        return try {
+            mtp.deviceInfo?.serialNumber
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Keeps the device's name for its folders on the home screen while it is unplugged. */
+    private fun remember(key: String, name: String) {
+        if (settings.settings.value.knownDevices[key] == name) return
+        settings.update { s -> s.copy(knownDevices = s.knownDevices + (key to name)) }
+    }
+
+    /** The name of the device [path] is on, connected or remembered; null for other paths. */
+    fun nameOf(path: String): String? {
+        val key = MtpPaths.deviceOf(path) ?: return null
+        return _devices.value.firstOrNull { it.key == key }?.name ?: settings.settings.value.knownDevices[key]
+    }
+
+    /** The device [path] is on is connected and open. */
+    fun isReady(path: String): Boolean {
+        val key = MtpPaths.deviceOf(path) ?: return false
+        return _devices.value.any { it.key == key && it.state == State.READY }
+    }
+
+    /**
+     * A tap on a folder of a device that isn't open (todo §11.4): plugged in without access → the
+     * permission prompt; else false (it isn't plugged in).
+     */
+    fun requestAccessFor(path: String): Boolean {
+        val model = MtpPaths.deviceOf(path)?.let(MtpPaths::modelOf) ?: return false
+        val m = usb ?: return false
+        val dev = m.deviceList.values.firstOrNull { isMtp(it) && MtpPaths.modelPrefix(it.vendorId, it.productId) == model } ?: return false
+        requestAccess(dev.deviceId)
+        return true
+    }
+
     /** The device's storages as volumes; false (and the device FAILED) when they can't be read. */
-    private suspend fun readStorages(c: MtpConnection): Boolean {
+    private suspend fun readStorages(id: Int, c: MtpConnection): Boolean {
         val storages = try {
             c.storages()
         } catch (e: IOException) {
-            if (connections[c.deviceId] === c) setState(c.deviceId, State.FAILED, e.message)
+            if (connections[id] === c) setState(id, State.FAILED, e.message)
             return false
         }
         val vols = storages.map { s ->
-            Volume(MtpPaths.storageRoot(c.deviceId, s.id), s.label, removable = true, freeBytes = s.freeBytes, totalBytes = s.totalBytes, device = true)
+            Volume(MtpPaths.storageRoot(c.key, s.id), s.label, removable = true, freeBytes = s.freeBytes, totalBytes = s.totalBytes, device = true)
         }
         _devices.update { list ->
             list.map {
-                if (it.id != c.deviceId) it
+                if (it.id != id) it
                 else it.copy(
+                    key = c.key,
                     state = State.READY, storages = vols,
                     message = if (vols.isEmpty()) "Unlock the device and choose “File transfer”, then tap here" else null,
                 )
@@ -197,11 +279,17 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
     private fun detached(id: Int) {
         storageWatch.remove(id)?.cancel()
         connections.remove(id)?.close()
+        val key = keys.remove(id)
         _devices.update { list -> list.filter { it.id != id } }
-        scope.launch(Dispatchers.IO) { mirror.clear(id) }
+        if (key != null) scope.launch(Dispatchers.IO) { mirror.clear(key) }
     }
 
-    fun connection(path: String): MtpConnection? = MtpPaths.parse(path)?.let { connections[it.deviceId] }
+    /** The open connection of the device [path] is on, found by its key. */
+    fun connection(path: String): MtpConnection? {
+        val key = MtpPaths.deviceOf(path) ?: return null
+        val id = keys.entries.firstOrNull { it.value == key }?.key ?: return null
+        return connections[id]
+    }
 
     /** The storage [path] is on, as a volume for breadcrumbs and the top bar. */
     fun volumeOf(path: String): Volume? {
@@ -249,6 +337,9 @@ class MtpDevices(private val context: Context, private val scope: CoroutineScope
 
     /** Folder collage candidates on a device (todo §9.8 item 5) and the folder's item count. */
     suspend fun folderPreview(dir: String): Pair<List<FileEntry>, Int> = connection(dir)?.folderPreview(dir) ?: (emptyList<FileEntry>() to 0)
+
+    /** Whether a device file can play straight from the device (todo §11.4) instead of from a copy. */
+    fun streams(path: String): Boolean = connection(path)?.streams(path) == true
 
     /** Subfolders of a device folder, for the folder picker. */
     suspend fun subfolders(dir: String): List<FileEntry> = connection(dir)?.list(dir, showHidden = false)?.filter { it.isFolder } ?: throw DeviceGone()

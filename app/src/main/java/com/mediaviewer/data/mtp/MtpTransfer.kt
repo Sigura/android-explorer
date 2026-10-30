@@ -46,7 +46,8 @@ class MtpTransfer(
                 continue
             }
             try {
-                copy(src, destDir)
+                // A copy that goes through this phone says which half it is in (todo §11.4).
+                copy(src, destDir) { step -> onProgress(i, sources.size, "${src.name} · $step") }
                 if (move) {
                     if (deleteOriginal(src)) onMoved(src.path) else failed.add(src.path to "copied, but the original couldn't be deleted")
                 }
@@ -65,7 +66,12 @@ class MtpTransfer(
 
     private fun conn(path: String): MtpConnection = connection(path) ?: throw DeviceGone()
 
-    private suspend fun copy(src: FileEntry, destDir: String) {
+    /**
+     * Copies [src] into [destDir]. [step] tells how far a file that passes through this phone is:
+     * `reading 40 %` while it comes off a device, `writing` while it goes onto one (one call: the
+     * platform has no partial send, so there is no percentage and Stop waits for it).
+     */
+    private suspend fun copy(src: FileEntry, destDir: String, step: (String) -> Unit = {}) {
         coroutineContext.ensureActive()
         val fromDevice = MtpPaths.isMtp(src.path)
         val toDevice = MtpPaths.isMtp(destDir)
@@ -79,17 +85,31 @@ class MtpTransfer(
                 if (!t.mkdirs()) throw IOException("can't create ${t.name}")
                 t.path
             }
-            for (child in children) copy(child, target)
+            for (child in children) copy(child, target, step)
             return
         }
+        var shown = -1L
+        val reading = { done: Long, total: Long ->
+            val pct = if (total > 0) done * 100 / total else 0
+            if (pct != shown) {
+                shown = pct
+                step("reading $pct %")
+            }
+        }
         when {
-            !toDevice -> conn(src.path).download(src.path, FileOps.freeName(File(destDir), src.name))
-            !fromDevice -> conn(destDir).upload(File(src.path), destDir)
+            !toDevice -> conn(src.path).download(src.path, FileOps.freeName(File(destDir), src.name), reading)
+            !fromDevice -> {
+                step("writing")
+                conn(destDir).upload(File(src.path), destDir)
+            }
             else -> {
+                // Same device or another one: the platform has no CopyObject / MoveObject, so the
+                // file comes to this phone and goes back (todo §11.4).
                 temp.mkdirs()
                 val tmp = File(temp, "${System.nanoTime()}-${src.name}")
                 try {
-                    conn(src.path).download(src.path, tmp)
+                    conn(src.path).download(src.path, tmp, reading)
+                    step("writing")
                     conn(destDir).upload(tmp, destDir, src.name)
                 } finally {
                     tmp.delete()

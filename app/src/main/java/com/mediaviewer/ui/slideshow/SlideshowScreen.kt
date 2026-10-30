@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -46,6 +47,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -74,7 +76,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -83,9 +84,12 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
+import coil3.request.ErrorResult
 import coil3.request.ImageRequest
 import coil3.size.Scale
 import com.mediaviewer.data.fs.FolderListing
+import com.mediaviewer.data.mtp.MediaSources
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.settings.SlideshowSession
 import com.mediaviewer.data.settings.Transition
 import com.mediaviewer.domain.SlideTiming
@@ -108,13 +112,18 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     var slideSize by remember { mutableStateOf(IntSize.Zero) }
     /** GIFs on screen (two during a transition), so the one being left can say where it was. */
     val gifs = remember { HashMap<String, SlideGif>() }
-    val player = remember {
-        // Platform decoders first; the bundled FFmpeg extension when the device has none.
-        val renderers = DefaultRenderersFactory(ctx)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            .setEnableDecoderFallback(true)
-        // Silent until the mute setting is applied, so a video never blips sound on start.
-        ExoPlayer.Builder(ctx, renderers).build().apply { volume = 0f }
+    val players = remember {
+        SlidePlayers {
+            // Platform decoders first; the bundled FFmpeg extension when the device has none.
+            val renderers = DefaultRenderersFactory(ctx)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                .setEnableDecoderFallback(true)
+            // Silent until the mute setting is applied, so a video never blips sound on start.
+            ExoPlayer.Builder(ctx, renderers)
+                // Videos on a camera or phone over USB stream from it (todo §11.4).
+                .setMediaSourceFactory(MediaSources.factory(ctx, vm.mtp::connection))
+                .build().apply { volume = 0f }
+        }
     }
 
     // README §5.3: the screen stays on; immersive, black.
@@ -130,22 +139,44 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
         }
         c.positionOf = { e ->
             when (e.type) {
-                MediaType.VIDEO -> player.currentPosition
+                MediaType.VIDEO -> players.playerFor(e.path)?.currentPosition ?: 0L
                 MediaType.ANIMATED -> gifs[e.path]?.positionMs ?: 0L
                 else -> 0L
             }
         }
-        c.preloadImage = { e ->
-            val size = slideSize
-            if (size == IntSize.Zero) null else SingletonImageLoader.get(ctx).execute(slideRequest(ctx, e, size))
+        // Gets the target of a step ready before the slide changes (todo §11.1).
+        c.prepare = { e, positionMs ->
+            when (e.type) {
+                // A device file is downloaded into the mirror first (todo §11.4).
+                MediaType.IMAGE -> {
+                    val file = c.localFile(e)
+                    val size = slideSize
+                    if (size == IntSize.Zero) null
+                    else (SingletonImageLoader.get(ctx).execute(slideRequest(ctx, file, size)) as? ErrorResult)?.let { it.throwable.message ?: "can't decode" }
+                }
+                // The block scan reads the whole file; the slide then decodes from the cache. A
+                // file that isn't a GIF inside still has the platform decoder, so no failure here.
+                MediaType.ANIMATED -> {
+                    val file = c.localFile(e)
+                    try {
+                        vm.thumbnails.gifMeta(e.copy(path = file.path))
+                    } catch (ex: kotlinx.coroutines.CancellationException) {
+                        throw ex
+                    } catch (ex: Exception) {
+                    }
+                    null
+                }
+                MediaType.VIDEO -> players.prepare(c.videoUri(e), e.path, positionMs)
+                else -> null
+            }
         }
         onDispose {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             ctl.show(WindowInsetsCompat.Type.systemBars())
             MouseBack.handler = null
-            c.videoPositionMs = player.currentPosition
+            c.videoPositionMs = players.current.currentPosition
             c.onLeave()
-            player.release()
+            players.release()
         }
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -153,18 +184,18 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
         val obs = LifecycleEventObserver { _, ev ->
             when (ev) {
                 Lifecycle.Event.ON_PAUSE -> {
-                    c.videoPositionMs = player.currentPosition
+                    c.videoPositionMs = players.current.currentPosition
                     c.saveSession(force = true)
                 }
                 // Stop, not pause: in DeX and split screen (Android 9) a visible window is paused
                 // as soon as another window gets focus, and the video should keep playing (README §3.9).
                 Lifecycle.Event.ON_STOP -> {
-                    player.pause()
+                    players.all.forEach { it.pause() }
                     c.onVisible(false)
                 }
                 Lifecycle.Event.ON_START -> {
                     c.onVisible(true)
-                    if (!c.paused) player.play()
+                    if (!c.paused && c.current?.type == MediaType.VIDEO) players.current.play()
                 }
                 else -> Unit
             }
@@ -183,63 +214,73 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     // The item timer (README §5.1).
     LaunchedEffect(c.generation, c.timing, c.paused, c.menuOpen, c.starts, c.single) { c.tick() }
 
-    // Video playback with one player instance.
+    // Video playback: the slide's player, or the spare one that prepared it (todo §11.1).
     LaunchedEffect(c.generation) {
         val e = current
         if (e == null || e.type != MediaType.VIDEO) {
-            player.stop()
-            player.clearMediaItems()
+            players.stopCurrent()
             return@LaunchedEffect
         }
-        player.setMediaItem(MediaItem.fromUri(Uri.fromFile(File(e.path))))
-        player.repeatMode = Player.REPEAT_MODE_OFF
-        player.prepare()
-        if (c.resumePositionMs > 0) player.seekTo(c.resumePositionMs)
-        player.playWhenReady = !c.paused
+        // A device video streams, or plays from its mirror copy (todo §11.4).
+        val uri = try {
+            c.videoUri(e)
+        } catch (ex: java.io.IOException) {
+            c.onFailed(e, ex.message ?: "read error")
+            return@LaunchedEffect
+        }
+        val prepared = players.show(uri, e.path, c.resumePositionMs, play = !c.paused)
+        // A prepared player is READY already: no state change will report it.
+        val p = players.current
+        if (prepared && p.playbackState == Player.STATE_READY) c.onReady(e, p.duration.takeIf { it > 0 }, p.videoSize.width, p.videoSize.height)
         while (true) {
             delay(1000)
-            c.videoPositionMs = player.currentPosition
+            c.videoPositionMs = players.current.currentPosition
             c.saveSession()
         }
     }
     LaunchedEffect(settings.intervalSec) { c.onIntervalChanged() }
     LaunchedEffect(settings.muted) {
-        player.volume = if (settings.muted) 0f else 1f
-        // With sound on, the video takes audio focus, so a playing book pauses (todo §3.3).
-        player.setAudioAttributes(
-            androidx.media3.common.AudioAttributes.Builder().setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build(),
-            !settings.muted,
-        )
+        players.all.forEach { player ->
+            player.volume = if (settings.muted) 0f else 1f
+            // With sound on, the video takes audio focus, so a playing book pauses (todo §3.3).
+            player.setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder().setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build(),
+                !settings.muted,
+            )
+        }
     }
     // The open menu only stops the timer; the video keeps playing.
-    LaunchedEffect(c.paused) { if (c.current?.type == MediaType.VIDEO) player.playWhenReady = !c.paused }
-    LaunchedEffect(c.timing, c.single) {
+    LaunchedEffect(c.paused) { if (c.current?.type == MediaType.VIDEO) players.current.playWhenReady = !c.paused }
+    LaunchedEffect(c.timing, c.single, c.generation) {
         if (c.current?.type == MediaType.VIDEO) {
-            player.repeatMode = if (c.timing?.loop == true || c.single) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            players.current.repeatMode = if (c.timing?.loop == true || c.single) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         }
     }
-    DisposableEffect(player) {
-        val l = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                val e = c.current ?: return
-                if (e.type != MediaType.VIDEO) return
-                when (state) {
-                    Player.STATE_READY -> {
-                        val size = player.videoSize
-                        c.onReady(e, player.duration.takeIf { it > 0 }, size.width, size.height)
+    DisposableEffect(players) {
+        // Both players report, but only the slide's own player speaks for the item on screen.
+        val listeners = players.all.map { player ->
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    val e = c.current ?: return
+                    if (e.type != MediaType.VIDEO || player !== players.current) return
+                    when (state) {
+                        Player.STATE_READY -> {
+                            val size = player.videoSize
+                            c.onReady(e, player.duration.takeIf { it > 0 }, size.width, size.height)
+                        }
+                        Player.STATE_ENDED -> c.onPlaybackEnded(e)
+                        else -> Unit
                     }
-                    Player.STATE_ENDED -> c.onPlaybackEnded(e)
-                    else -> Unit
                 }
-            }
 
-            override fun onPlayerError(error: PlaybackException) {
-                c.current?.let { c.onFailed(it, error.errorCodeName) }
-            }
+                override fun onPlayerError(error: PlaybackException) {
+                    if (player !== players.current) return
+                    c.current?.let { c.onFailed(it, error.errorCodeName) }
+                }
+            }.also(player::addListener)
         }
-        player.addListener(l)
-        onDispose { player.removeListener(l) }
+        onDispose { players.all.zip(listeners).forEach { (p, l) -> p.removeListener(l) } }
     }
 
     Box(
@@ -277,13 +318,26 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             label = "slide",
         ) { e ->
             // The image is decoded for the slide's size, so it waits for the first layout.
-            if (e != null && slideSize != IntSize.Zero) Slide(e, c, player, zoom, gifs, vm.thumbnails.largeGifBytes, slideSize)
+            if (e != null && slideSize != IntSize.Zero) Slide(e, c, players, zoom, gifs, vm.thumbnails.largeGifBytes, slideSize)
         }
         val t = c.timing
         if (t != null && !c.single && current != null) {
-            ItemTimer(c, current, t, player)
+            ItemTimer(c, current, t, players)
         }
         PositionFlash(c)
+        // A manual step waits for its target (todo §11.1): the slide stays, a small mark shows it.
+        if (c.waiting) {
+            CircularProgressIndicator(
+                color = Color.White.copy(alpha = 0.85f),
+                trackColor = Color.Black.copy(alpha = 0.35f),
+                strokeWidth = 2.5.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(16.dp)
+                    .size(22.dp),
+            )
+        }
         if (c.paused && !c.menuOpen) {
             Icon(
                 Icons.Rounded.Pause,
@@ -446,7 +500,7 @@ private fun transitionFor(t: Transition, dir: Int): ContentTransform = when (t) 
 private fun Slide(
     e: FileEntry,
     c: SlideshowController,
-    player: ExoPlayer,
+    players: SlidePlayers,
     zoom: ZoomState,
     gifs: MutableMap<String, SlideGif>,
     largeGifBytes: Long,
@@ -462,28 +516,46 @@ private fun Slide(
             translationY = zoom.offset.y
         }
     when (e.type) {
-        MediaType.VIDEO -> AndroidView(
-            factory = { context ->
-                PlayerView(context).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
-                    this.player = player
-                }
-            },
-            onRelease = { it.player = null },
-            modifier = zoomMod,
-        )
+        MediaType.VIDEO -> {
+            // The player that holds this video: it may change hands while the slide is on screen.
+            val player = players.playerFor(e.path)
+            AndroidView(
+                factory = { context ->
+                    PlayerView(context).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        setShutterBackgroundColor(android.graphics.Color.BLACK)
+                        this.player = player
+                    }
+                },
+                update = { if (it.player !== player) it.player = player },
+                onRelease = { it.player = null },
+                modifier = zoomMod,
+            )
+        }
         MediaType.IMAGE, MediaType.ANIMATED -> {
+            // A device file's mirror copy (todo §11.4): normally there already, prepared before the step.
+            val local = MtpPaths.isMtp(e.path)
+            val file by produceState(if (local) null else File(e.path), e.path) {
+                if (local) {
+                    value = try {
+                        c.localFile(e)
+                    } catch (ex: java.io.IOException) {
+                        c.onFailed(e, ex.message ?: "read error")
+                        null
+                    }
+                }
+            }
+            val f = file ?: return
             // GIFs play with the app's own decoder, which can start where the GIF was left and pause
             // on a frame; very large ones, and files that aren't GIFs inside, use the platform's.
-            val gif = remember(e.path) {
-                if (e.type == MediaType.ANIMATED && e.size <= largeGifBytes) SlideGif(File(e.path), c.resumePositionMs) else null
+            val gif = remember(e.path, f) {
+                if (e.type == MediaType.ANIMATED && e.size <= largeGifBytes) SlideGif(f, c.resumePositionMs) else null
             }
             if (gif != null && gif.state != SlideGif.State.UNSUPPORTED) {
                 PlayedGif(e, gif, c, gifs, zoomMod)
             } else {
-                val request = remember(e.path) { slideRequest(ctx, e, size) }
+                val request = remember(e.path, f) { slideRequest(ctx, f, size) }
                 AsyncImage(
                     model = request,
                     contentDescription = e.name,
@@ -502,8 +574,8 @@ private fun Slide(
  * The slide's image request. The preload (README §5.3) builds the same one, so the slide finds the
  * decoded bitmap in Coil's memory cache; an animation isn't preloaded, it would be decoded twice.
  */
-private fun slideRequest(ctx: android.content.Context, e: FileEntry, size: IntSize): ImageRequest =
-    ImageRequest.Builder(ctx).data(File(e.path)).size(size.width, size.height).scale(Scale.FIT).build()
+private fun slideRequest(ctx: android.content.Context, file: File, size: IntSize): ImageRequest =
+    ImageRequest.Builder(ctx).data(file).size(size.width, size.height).scale(Scale.FIT).build()
 
 @Composable
 private fun PlayedGif(e: FileEntry, gif: SlideGif, c: SlideshowController, gifs: MutableMap<String, SlideGif>, modifier: Modifier) {
@@ -530,10 +602,11 @@ private fun PlayedGif(e: FileEntry, gif: SlideGif, c: SlideshowController, gifs:
  * A video that plays once follows the player instead.
  */
 @Composable
-private fun androidx.compose.foundation.layout.BoxScope.ItemTimer(c: SlideshowController, e: FileEntry, t: SlideTiming, player: ExoPlayer) {
+private fun androidx.compose.foundation.layout.BoxScope.ItemTimer(c: SlideshowController, e: FileEntry, t: SlideTiming, players: SlidePlayers) {
     var progress by remember(c.generation) { mutableFloatStateOf(0f) }
     LaunchedEffect(c.generation, t) {
         while (true) {
+            val player = players.current
             progress = if (e.type == MediaType.VIDEO && !t.loop) {
                 player.currentPosition.toFloat() / player.duration.coerceAtLeast(1)
             } else {

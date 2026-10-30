@@ -50,6 +50,7 @@ import com.mediaviewer.ui.MouseBack
 import com.mediaviewer.ui.Overlay
 import com.mediaviewer.ui.PermissionScreen
 import com.mediaviewer.ui.Screen
+import com.mediaviewer.ui.browser.FileDrop
 import com.mediaviewer.ui.browser.FolderScreen
 import com.mediaviewer.ui.browser.LocalThumbnails
 import com.mediaviewer.ui.common.WaitIndicator
@@ -106,6 +107,23 @@ class MainActivity : ComponentActivity() {
         dev?.let { vm.deviceAttached(it.deviceId) }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // A remembered camera or phone plugged in now asks for access by itself (todo §11.4).
+        vm.mtp.foreground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        vm.mtp.foreground = false
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Keys now go to another window, which would see Shift released, not this one.
+        if (!hasFocus) FileDrop.shiftHeld = false
+    }
+
     override fun onResume() {
         super.onResume()
         vm.onPermissionMaybeChanged()
@@ -113,6 +131,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        FileDrop.shiftHeld = ev.metaState and KeyEvent.META_SHIFT_ON != 0
         if (ev.actionMasked == MotionEvent.ACTION_DOWN && ev.isFromSource(InputDevice.SOURCE_MOUSE) &&
             ev.buttonState and MotionEvent.BUTTON_SECONDARY != 0
         ) {
@@ -122,6 +141,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        // Mouse hover and wheel carry the keyboard's modifiers too (todo §11.3).
+        FileDrop.shiftHeld = ev.metaState and KeyEvent.META_SHIFT_ON != 0
         if (ev.actionMasked == MotionEvent.ACTION_BUTTON_PRESS && ev.actionButton == MotionEvent.BUTTON_SECONDARY) {
             MouseBack.lastSecondaryPress = SystemClock.uptimeMillis()
         }
@@ -130,6 +151,11 @@ class MainActivity : ComponentActivity() {
 
     /** The mouse back button is "previous item" in the slideshow (README §5.2). */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Shift held at a drop moves our own tiles instead of copying them (todo §11.3).
+        FileDrop.shiftHeld = when (event.keyCode) {
+            KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> event.action == KeyEvent.ACTION_DOWN
+            else -> event.isShiftPressed
+        }
         if (event.keyCode == KeyEvent.KEYCODE_BACK && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             // DeX: an unconsumed right-click arrives as Back (README §3.9).
             if (SystemClock.uptimeMillis() - MouseBack.lastSecondaryPress < MouseBack.RIGHT_CLICK_BACK_MS) return true

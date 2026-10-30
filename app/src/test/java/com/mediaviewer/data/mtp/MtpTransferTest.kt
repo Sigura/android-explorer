@@ -22,7 +22,7 @@ class MtpTransferTest {
     private val root = MtpPaths.storageRoot(D, S)
     private val tmp: File = Files.createTempDirectory("transfer").toFile()
     private val temp = File(tmp, "temp")
-    private val transfer = MtpTransfer({ p -> if (MtpPaths.parse(p)?.deviceId == D) conn else null }, temp)
+    private val transfer = MtpTransfer({ p -> if (MtpPaths.parse(p)?.device == D) conn else null }, temp)
     private val progress = ArrayList<String>()
 
     @After
@@ -47,7 +47,8 @@ class MtpTransferTest {
         val r = run(listOf(local(a), local(trip)), root)
         assertEquals(2, r.done)
         assertEquals(emptyList<Pair<String, String>>(), r.failed)
-        assertEquals(listOf("1/2 a.jpg", "2/2 Trip"), progress)
+        // Each file says when it is being written to the device (todo §11.4); b.jpg under Trip's line.
+        assertEquals(listOf("1/2 a.jpg", "1/2 a.jpg · writing", "2/2 Trip", "2/2 Trip · writing"), progress)
         assertArrayEquals(byteArrayOf(1), dev.byName(MtpFormats.ROOT, "a (1).jpg")!!.data)
         val t = dev.byName(MtpFormats.ROOT, "Trip")!!.info.handle
         assertArrayEquals(byteArrayOf(2), dev.byName(t, "b.jpg")!!.data)
@@ -79,6 +80,9 @@ class MtpTransferTest {
         dev.file(S, a, "x.jpg", byteArrayOf(7))
         val x = runBlocking { conn.list("$root/A") }.single()
         val r = run(listOf(x), "$root/B")
+        // Each half of the round trip shows in the progress (todo §11.4).
+        assertTrue(progress.toString(), progress.any { it.endsWith("x.jpg · reading 100 %") })
+        assertTrue(progress.toString(), progress.any { it.endsWith("x.jpg · writing") })
         assertEquals(1, r.done)
         val b = dev.byName(MtpFormats.ROOT, "B")!!.info.handle
         assertArrayEquals(byteArrayOf(7), dev.byName(b, "x.jpg")!!.data)

@@ -513,14 +513,14 @@ fun EntryTile(
     listen: ListenStatus? = null,
     /** A folder's ▶ (todo §3.2): play or continue it; `true` = open the player screen too. Null = no button. */
     onPlay: ((Boolean) -> Unit)? = null,
-    /** A folder takes files dropped on it (todo §10.10): the URIs, and `release` for the drag's read permission. */
-    onDropInto: ((uris: List<android.net.Uri>, release: () -> Unit) -> Unit)? = null,
+    /** A folder takes files dropped on it (todo §10.10): the URIs, `Shift` held, and `release` for the drag's read permission. */
+    onDropInto: ((uris: List<android.net.Uri>, shift: Boolean, release: () -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var dropHover by remember(entry.path) { mutableStateOf(false) }
     val activity = LocalContext.current as? android.app.Activity
     val dropInto by rememberUpdatedState(onDropInto)
-    val drop = remember(entry.path) { FileDrop(activity, onHover = { dropHover = it }) { uris, release -> dropInto?.invoke(uris, release) ?: release() } }
+    val drop = remember(entry.path) { FileDrop(activity, onHover = { dropHover = it }) { uris, shift, release -> dropInto?.invoke(uris, shift, release) ?: release() } }
     val dropModifier = if (onDropInto == null) {
         modifier
     } else {

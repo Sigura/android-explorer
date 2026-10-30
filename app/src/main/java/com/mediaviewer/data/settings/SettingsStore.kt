@@ -54,6 +54,11 @@ data class AppSettings(
     val showHidden: Boolean = false,
     val theme: ThemeMode = ThemeMode.SYSTEM,
     val favourites: Set<String> = emptySet(),
+    /**
+     * Cameras and phones seen before (todo §11.4), by device key (`MtpPaths.deviceKey`) → name:
+     * recent folders and favourites on one show its name while it is unplugged.
+     */
+    val knownDevices: Map<String, String> = emptyMap(),
     /** How many recent folders the root screen shows (README §4 "Root"); up to MAX_RECENT are kept. */
     val recentCount: Int = 20,
     val showNames: Boolean = false,
@@ -64,6 +69,7 @@ data class AppSettings(
     val windowHintShown: Boolean = false,
     /** Editor text size in sp (todo §6.6), one of `EDITOR_TEXT_STEPS`. */
     val editorTextSp: Int = 14,
+    /** Long lines wrap in the editor and in read-only files (todo §11.2). */
     val editorWrap: Boolean = true,
     /** Code, logs and tables in the bundled JetBrains Mono; false = the system monospace (todo §10.9). */
     val codeFontBundled: Boolean = true,
@@ -150,13 +156,19 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val showHidden = booleanPreferencesKey("show_hidden")
         val theme = stringPreferencesKey("theme")
         val favourites = stringSetPreferencesKey("favourites")
+        /** `key<TAB>name` per remembered device (todo §11.4). */
+        val knownDevices = stringSetPreferencesKey("known_devices")
         val recentCount = intPreferencesKey("recent_count")
         val showNames = booleanPreferencesKey("show_names")
         val zonesHint = booleanPreferencesKey("zones_hint_shown")
         val mouseMode = stringPreferencesKey("mouse_mode")
         val windowHint = booleanPreferencesKey("window_hint_shown")
         val editorTextSp = intPreferencesKey("editor_text_sp")
-        val editorWrap = booleanPreferencesKey("editor_wrap")
+        /**
+         * `_v2` (todo §11.2): every settings write stores every key, so an *off* written once under
+         * `editor_wrap` stuck; the new key starts each install wrapped once, as the default says.
+         */
+        val editorWrap = booleanPreferencesKey("editor_wrap_v2")
         val codeFontBundled = booleanPreferencesKey("code_font_bundled")
         val editorTheme = stringPreferencesKey("editor_theme")
         val editorLineNumbers = booleanPreferencesKey("editor_line_numbers")
@@ -267,6 +279,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
             showHidden = p[K.showHidden] ?: d.showHidden,
             theme = enumOr(p[K.theme], d.theme),
             favourites = p[K.favourites] ?: emptySet(),
+            knownDevices = p[K.knownDevices].orEmpty().mapNotNull { e -> e.split('\t', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }.toMap(),
             recentCount = (p[K.recentCount] ?: d.recentCount).coerceIn(1, MAX_RECENT),
             showNames = p[K.showNames] ?: d.showNames,
             zonesHintShown = p[K.zonesHint] ?: false,
@@ -307,6 +320,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p[K.showHidden] = s.showHidden
         p[K.theme] = s.theme.name
         p[K.favourites] = s.favourites
+        p[K.knownDevices] = s.knownDevices.mapTo(HashSet()) { (k, name) -> k + "\t" + name.replace('\t', ' ') }
         p[K.recentCount] = s.recentCount
         p[K.showNames] = s.showNames
         p[K.zonesHint] = s.zonesHintShown

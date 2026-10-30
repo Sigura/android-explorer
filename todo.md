@@ -18,7 +18,9 @@ Priority order: **3 → 4 → 1b** — all three done on 2026-10-29 (§3.0, §3.
 
 **Done (2026-10-29, third step):** lectures (override, shared position, frame covers), embedded subtitles, CC, seek bubble, file info, Share, moved books (§3.0b).
 
-**Next session** (slideshow Back / Next waits for the item and goes on where it was left, editor wrap by default, drop moves and the root screen, MTP streaming and remembered devices): prompt in [docs/NEXT_SESSION_SLIDESHOW_DROP_MTP.md](docs/NEXT_SESSION_SLIDESHOW_DROP_MTP.md).
+**Done (2026-10-29, not yet tried on a device):** slideshow Back / Next wait for the item and go on where it was left, editor wrap by default, drop moves and the home screen, MTP streaming, remembered devices and books from a device (§11; README §2, §3.13, §3.14, §3.16).
+
+**Next session:** prompt in [docs/NEXT_SESSION_APNG_ARTWORK_DEVICE_BOOKS.md](docs/NEXT_SESSION_APNG_ARTWORK_DEVICE_BOOKS.md).
 
 **Still open in §3 / §4:** artwork in the notification (§4.6), the external player's position read back (§3.6), detecting that a battery saver stopped playback (§3.3), a TalkBack check (§4.6), and the optional extras of §5.
 
@@ -32,8 +34,9 @@ Contents
 6. ~~Text files: create and edit~~ — done, README §3.13
 7. ~~Linux desktop version~~ — dropped from the plan
 8. ~~Sorting, mini player and long names~~ — done, README §1
-9. [MTP devices: cameras and phones over USB](#9-mtp-devices-cameras-and-phones-over-usb) — first and second steps done, README §3.14; open: §9.8
+9. [MTP devices: cameras and phones over USB](#9-mtp-devices-cameras-and-phones-over-usb) — first to third steps done, README §3.14; open: §9.8
 10. [Listening tiles, animated WebP, video thumbnails, drop, find, SAF](#10-listening-tiles-animated-webp-video-thumbnails-drop-find-saf) — requested 2026-10-29
+11. [Slideshow Back / Next, editor wrap, drop moves, MTP third step](#11-slideshow-back--next-editor-wrap-drop-moves-mtp-third-step) — done 2026-10-29; device checks open
 
 ---
 
@@ -220,7 +223,6 @@ Done 2026-10-25, not yet tried on a device. Decisions are in README §6.
 Still open:
 
 - ~~Replace~~ — done 2026-10-29 (README §2 Text editor).
-- **Read-only files** (1–10 MB) always wrap: the line list has no sideways scroll.
 - **Verify on a device:** typing speed in a 1 MB file (the text field lays out the whole text on each change), colouring speed near the 200 K limit, the keyboard over the text, pinch next to text selection, `Tab` / `Esc` on DeX keyboards, the safe save on FAT / exFAT through FUSE, and whether breadcrumbs fit at 360 dp with the phone ⋮ menu.
 
 ---
@@ -239,7 +241,7 @@ Requested 2026-10-25; built as described below. **Verify on a device:** the mini
 
 ## 9. MTP devices: cameras and phones over USB
 
-Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):** the home screen *Devices* section, browsing, device thumbnails, the slideshow from a local mirror, *Copy to…* and *Open with* (README §3.14). **Second step done (2026-10-29, tested against a fake device):** delete with *Undo*, copy and move to and from devices, new folders, live updates, folder collages, auto-open for cameras, thumbnails for files without one (README §3.14). Open: §9.8.
+Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):** the home screen *Devices* section, browsing, device thumbnails, the slideshow from a local mirror, *Copy to…* and *Open with* (README §3.14). **Second step done (2026-10-29, tested against a fake device):** delete with *Undo*, copy and move to and from devices, new folders, live updates, folder collages, auto-open for cameras, thumbnails for files without one (README §3.14). **Third step done (2026-10-29, §11.4):** streaming of videos and books, remembered devices, progress for copies on a device. Open: §9.8.
 
 **Goal.** A camera, another phone, an action cam or a media player plugged into the phone or tablet (USB OTG, USB-C) shows up on the home screen. Its photos and videos can be browsed with thumbnails, watched in the slideshow and copied to this device, as easily as an SD card.
 
@@ -264,7 +266,7 @@ Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):
 
 - Every call to one device runs on its own thread, one after another (`MtpDevice` isn't thread-safe). Calls are short: file details 16 at a time, downloads in 1 MB chunks, so thumbnails interleave with a running download.
 - Every call has a watchdog (8 s; listing 30 s; thumbnail 10 s; chunk 20 s). A device that misses one is marked *not responding*: later calls fail at once, and the folder shows *"Device not responding — unplug it and plug it in again"* (README §2.1).
-- **Paths:** `mtp://<USB device id>/<storage id>/<folders>/<name>`. They are valid until the device is unplugged, so they are never added to recent folders, favourites or the slideshow session.
+- **Paths:** `mtp://<device key>/<storage id>/<folders>/<name>`; the key is stable for devices with a serial number (§11.4), so their folders can be recent folders and favourites.
 
 ### 9.4 Folder view
 
@@ -284,7 +286,7 @@ Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):
 - Leaving the slideshow returns to the device folder, focused on the last item shown.
 - Other files open with other apps (README §3.11) from a downloaded copy.
 - The mirror is emptied at app start and when the device is unplugged.
-- **Limits of this step:** the slideshow knows only the files downloaded so far (a random order shuffles those; *previous* stops at the tapped file until the download wraps round). Very large folders are better copied first.
+- ~~Limits of this step: the slideshow knows only the files downloaded so far~~ — since §11.4 the slideshow runs over the device folder itself and videos stream.
 
 ### 9.7 Unplugging
 
@@ -292,10 +294,10 @@ Requested 2026-10-25. **First step done (2026-10-25, not yet tried on a device):
 
 ### 9.8 Still open
 
-1. **Streaming playback** instead of the mirror for long videos: a Media3 `DataSource` over `getPartialObject` (seeking needs random access; **verify** read speed). Also the book player for audio folders on a device.
-2. **Remember devices:** a stable key (vendor id, product id and serial number, readable after permission) so recent folders and favourites can point into a device, shown dimmed while it is unplugged.
-3. **Copy on the device without the round trip:** `CopyObject` / `MoveObject` exist in MTP but not in `android.mtp.MtpDevice`; device → device copies go through a local temporary file.
-4. **verify** on devices: a Canon / Nikon / Sony camera in PTP mode, an Android phone in MTP mode (locked, then unlocked), a Kindle or MP3 player; 10,000-file listing speed; `getThumbnail` for videos on phones; `sendObject` and new folders on cameras (some refuse unknown formats); events from cameras; deleting full folders; behaviour when Android's Files app holds the device; unplugging during a download or upload; auto-open while the app is already open (`singleTop`); Android TV boxes with USB host.
+1. ~~Streaming playback~~, ~~remembered devices~~, ~~copy on the same device as one job with progress~~ — done (§11.4, README §3.14).
+2. **Copy on the device without the round trip:** `CopyObject` / `MoveObject` exist in MTP but not in `android.mtp.MtpDevice`; it would need our own USB bulk transfers (`UsbDeviceConnection`) beside the platform's session. Not planned.
+3. **Books on a device:** lecture folders, chapters, lyrics and covers (each needs a read of the file or its neighbours through the device).
+4. **verify** on devices: a Canon / Nikon / Sony camera in PTP mode, an Android phone in MTP mode (locked, then unlocked), a Kindle or MP3 player; 10,000-file listing speed; `getThumbnail` for videos on phones; `sendObject` and new folders on cameras (some refuse unknown formats); events from cameras; deleting full folders; behaviour when Android's Files app holds the device; unplugging during a download or upload; auto-open while the app is already open (`singleTop`); Android TV boxes with USB host. Added 2026-10-29 (§11.4): streaming read speed and seeking (a long video from a phone, a 4K clip from a camera), a video past 4 GB on a phone (`getPartialObject64`), unplugging during playback, the serial number of cameras (USB and MTP device info), two identical cameras, storage ids after replugging (cameras with two card slots), the automatic permission prompt for a remembered device, a book played from a phone and continued after replugging.
 
 ---
 
@@ -309,7 +311,7 @@ Requested 2026-10-29. Plan first, then the work; the findings of the research it
 | 10.2 | Our own player for animated WebP / AVIF strips in tiles | research + build (WebP) | **WebP done** (README §3.4); AVIF and APNG: research doc §2 |
 | 10.3 | Faster video thumbnails, per format | research | **done**: findings and ranked proposals in the research doc §3; next step: the strip disk cache |
 | 10.4 | Full player screen, speed, sleep timer, shuffle, chapters, lyrics | build | **done** (README §2 Listening, §3.12); open: §4.6 |
-| 10.5 | Drop files and folders into the app (DeX, Chromebooks, split screen) | research + build (files) | **done** for the folder grid (README §2 Desktops, §3.9); open: research doc §5 |
+| 10.5 | Drop files and folders into the app (DeX, Chromebooks, split screen) | research + build (files) | **done** (README §2 Desktops, §3.9; moves, home screen, tree URIs: §11.3); open: research doc §5 |
 | 10.6 | Text editor: find, rename from the editor | build | **done** (README §2 Text editor) |
 | 10.7 | Storage Access Framework fallback (for a Play Store build) | research | **done**: options and a recommendation in the research doc §7. **Not planned** (owner, 2026-10-29): no Play Store release is planned; revisit before one (first step: the Play declaration as a file manager, no code) or for devices that can't grant "All files access" (some Android TV boxes) |
 | 10.8 | Text editor: colour themes and richer colouring | build | **done** (README §2 Text editor, §3.13) |
@@ -320,7 +322,7 @@ Requested 2026-10-29. Plan first, then the work; the findings of the research it
 
 ### 10.10 SVG, APNG, MediaStore first frames, drops onto tiles, paste — done (2026-10-29)
 
-Built as planned (README §1, §2 *Desktops*, §3.4, §3.9, §3.15): SVG / SVGZ tiles (AndroidSVG 1.4), APNG strips (`ApngAnim`, tested in `ApngAnimTest`: frames rebuilt as PNGs and decoded by `ImageIO`, the compositing order recorded), MediaStore first frames, drops onto folder tiles, `Ctrl` + V. **Still open:** animated AVIF (needs a device), moves with `Shift` held while dropping, APNG in the slideshow (it shows the first frame).
+Built as planned (README §1, §2 *Desktops*, §3.4, §3.9, §3.15): SVG / SVGZ tiles (AndroidSVG 1.4), APNG strips (`ApngAnim`, tested in `ApngAnimTest`: frames rebuilt as PNGs and decoded by `ImageIO`, the compositing order recorded), MediaStore first frames, drops onto folder tiles, `Ctrl` + V. Moves with `Shift`: §11.3. **Still open:** animated AVIF (needs a device), APNG in the slideshow (it shows the first frame).
 
 ### 10.1 Where we are, on the folder tile
 
@@ -377,3 +379,33 @@ Requested 2026-10-29. **Done** the same day, with two changes to the plan below:
 - **Setting:** *Code font*: JetBrains Mono (default) / System monospace. The system choice stays for devices where the user installed their own font (Samsung font styles change `monospace` too).
 - **Not chosen:** Google Fonts *downloadable fonts* (no APK size, but needs Google Play services — missing on many TV boxes and Huawei devices — and a network fetch on first use); the APK grows by ~0.2 MB instead (release APK ~8.3 MB today).
 - **Steps:** add `res/font/jetbrains_mono.ttf` (subset with `pyftsubset`, keep `OFL.txt` in `app/src/main/assets/licenses/` and a line in Settings → About), `FontFamily(Font(R.font.jetbrains_mono, …))` in one place (`ui/common/Fonts.kt`), replace the three `Monospace` uses and `Typeface.MONOSPACE`. **Verify** that the text-preview line count per tile (README §3.10) still fits, since the metrics differ from Droid Sans Mono.
+
+---
+
+## 11. Slideshow Back / Next, editor wrap, drop moves, MTP third step
+
+Requested 2026-10-29 (prompt: [docs/NEXT_SESSION_SLIDESHOW_DROP_MTP.md](docs/NEXT_SESSION_SLIDESHOW_DROP_MTP.md)). Built in this order, one commit each; pure parts unit-tested, everything else **verify** on a device (no SDK in the build container).
+
+### 11.1 Slideshow Back / Next — done (README §2 *Slideshow*, §3.16)
+
+**Verify on a device:** a 4K HEIC and a 300 MB video from an SD card, rapid tapping, the TV remote's held arrow, DeX wheel scrolling; whether the spare player decodes the first frame before it gets a surface; two hardware decoders at once on a low-end phone.
+
+### 11.2 Text editor: wrap by default, also read-only — done (README §2 *Text editor*, §3.13)
+
+**Verify on a device:** sideways scrolling speed of a 10 MB log with wrap off; a file with one very long line (minified JSON) with wrap off.
+
+### 11.3 Drag and drop: moves, the home screen, folders — done (README §1, §2 *Desktops*, §3.9)
+
+Built as planned; recent folders on the home screen take drops too. The existing *Move to…* has no *Undo*; drops moved with `Shift` get one (the files go back under their old names when free).
+
+**Verify on a device:** that key events reach the source window during a drag in DeX (else `Shift` is missed and the drop copies); `Shift` released while another app has focus; two windows of the app in DeX and split screen; what My Files, Files by Google and Chrome send for a dragged folder (tree URI or a single document).
+
+### 11.4 MTP devices, third step — done (README §1, §2 *Root screen*, §3.14)
+
+Built as planned, with one change: the slideshow on a device now runs over the device folder itself instead of a listing of the mirror, so the order knows every file at once and videos can stream. Device paths carry a key (`vvvv-pppp-<serial>`) instead of the USB device id, which is what lets recent folders, favourites, sort and history point into a device. Still open: §9.8 items 2–4.
+
+**Verify on a device:** the list in §9.8 item 4.
+
+### 11.5 Docs — done
+
+README §1, §2, §3.9, §3.13, §3.14 and the new §3.16; §1a, §3.7 and §8 stay marked done. Next session: [docs/NEXT_SESSION_APNG_ARTWORK_DEVICE_BOOKS.md](docs/NEXT_SESSION_APNG_ARTWORK_DEVICE_BOOKS.md).

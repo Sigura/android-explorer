@@ -20,6 +20,8 @@ object FileOps {
         destDir: String,
         move: Boolean,
         onProgress: (index: Int, total: Int, name: String) -> Unit,
+        /** A moved source and where it is now (todo §11.3: *Undo* of a move moves it back). */
+        onMoved: (source: String, target: File) -> Unit = { _, _ -> },
     ): Result {
         val dest = File(destDir)
         val failed = ArrayList<Pair<String, String>>()
@@ -39,11 +41,14 @@ object FileOps {
                 }
                 val target = freeName(dest, src.name)
                 if (move && src.renameTo(target)) {
+                    onMoved(path, target)
                     done++
                     continue
                 }
                 copyRecursively(src, target)
-                if (move && !src.deleteRecursively()) failed.add(path to "copied, but the original couldn't be deleted")
+                if (move) {
+                    if (src.deleteRecursively()) onMoved(path, target) else failed.add(path to "copied, but the original couldn't be deleted")
+                }
                 done++
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

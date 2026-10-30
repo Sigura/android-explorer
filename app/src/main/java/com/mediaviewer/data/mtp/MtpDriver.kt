@@ -33,13 +33,19 @@ interface MtpDriver {
     /** GetPartialObject is supported: downloads go in chunks. */
     val canReadPartially: Boolean
 
+    /**
+     * GetPartialObject64 (Android's MTP extension) is supported too: partial reads past 4 GB, for
+     * streaming large videos (todo §11.4). Cameras don't have it.
+     */
+    val canReadPartially64: Boolean get() = false
+
     fun storageIds(): IntArray?
     fun storageInfo(id: Int): StorageInfo?
     fun objectHandles(storageId: Int, parent: Int): IntArray?
     fun objectInfo(handle: Int): ObjectInfo?
     fun thumbnail(handle: Int): ByteArray?
 
-    /** Reads up to [size] bytes at [offset] into [buf]; returns the count. */
+    /** Reads up to [size] bytes at [offset] into [buf]; returns the count. Offsets past 4 GB need [canReadPartially64]. */
     @Throws(IOException::class)
     fun readPartial(handle: Int, offset: Long, size: Long, buf: ByteArray): Long
 

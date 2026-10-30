@@ -293,7 +293,7 @@ class MtpConnectionTest {
     }
 
     companion object {
-        const val D = 3
+        const val D = "3"
         const val S = 65537
     }
 }

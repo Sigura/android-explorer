@@ -1,6 +1,7 @@
 package com.mediaviewer.data.history
 
 import com.mediaviewer.data.fs.FolderScanner
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.thumbs.TextDecode
 import com.mediaviewer.domain.Book
 import com.mediaviewer.domain.BookMatch
@@ -30,12 +31,40 @@ object BookFolder {
     /** Playlists larger than this are not read (a playlist is a few KB). */
     private const val MAX_PLAYLIST_BYTES = 512 * 1024
 
+    /**
+     * Folders on a camera or phone over USB (todo §11.4), set by the app: a folder's files, and a
+     * local copy of one of them (a playlist). Blocking, like everything here.
+     */
+    interface Device {
+        fun list(folder: String): List<FileEntry>?
+        fun copyOf(entry: FileEntry): File?
+    }
+
+    @Volatile var device: Device? = null
+
+    /** The folder holding [path]; a device path keeps its `mtp://` (a `java.io.File` folds the `//`). */
+    fun parentOf(path: String): String? = if (MtpPaths.isMtp(path)) MtpPaths.parent(path) else File(path).parent
+
     /** Audio files and videos of [folder] in play order: its `.m3u` playlist if any, then natural name order. */
     fun queue(folder: String, legacyCharset: Charset): List<FileEntry> {
+        if (MtpPaths.isMtp(folder)) return deviceQueue(folder, legacyCharset)
         val files = File(folder).listFiles()?.filter { it.isFile && !FolderScanner.isHidden(it.name) } ?: return emptyList()
         val playable = files.mapNotNull { FolderScanner.entryFor(it, showHidden = false) }.filter(Book::isPlayable)
         val listName = Book.choosePlaylist(files.map { it.name }, File(folder).name)
         val playlist = listName?.let { readPlaylist(File(folder, it), legacyCharset) }?.let { Playlist.parse(it, folder) }
+        return Book.order(playable, playlist)
+    }
+
+    /** The same for a device folder (todo §11.4): its listing, and a playlist read from a copy. */
+    private fun deviceQueue(folder: String, legacyCharset: Charset): List<FileEntry> {
+        val d = device ?: return emptyList()
+        val files = d.list(folder)?.filter { !it.isFolder } ?: return emptyList()
+        val playable = files.filter(Book::isPlayable)
+        val listName = Book.choosePlaylist(files.map { it.name }, folder.substringAfterLast('/'))
+        // Playlist paths go through the local-path parser as `/<device>/…`, then back to `mtp://`.
+        val playlist = listName?.let { n -> files.firstOrNull { it.name == n } }?.takeIf { it.size <= MAX_PLAYLIST_BYTES }
+            ?.let(d::copyOf)?.let { readPlaylist(it, legacyCharset) }
+            ?.let { text -> Playlist.parse(text, "/" + folder.removePrefix(MtpPaths.SCHEME)).map { MtpPaths.SCHEME + it.removePrefix("/") } }
         return Book.order(playable, playlist)
     }
 
@@ -61,7 +90,8 @@ object BookFolder {
      * so a book on an unplugged SD card keeps its history.
      */
     private fun adoptMoved(folder: String, queue: List<FileEntry>, history: HistoryStore): FolderHistory? {
-        val orphans = history.orphans { path -> File(path).exists() || !File(storageRoot(path)).exists() }
+        // Device folders can't be checked without the device: they never count as gone.
+        val orphans = history.orphans { path -> MtpPaths.isMtp(path) || File(path).exists() || !File(storageRoot(path)).exists() }
         if (orphans.isEmpty()) return null
         val here = queue.map { BookMatch.FileKey(it.name, it.size) }
         val candidates = orphans.map { (h, files) ->
@@ -118,7 +148,7 @@ object BookFolder {
      * book mode, from the start in music mode or when it was heard to the end. Null when [path] isn't playable.
      */
     fun startAt(path: String, history: HistoryStore, legacyCharset: Charset): ResumePoint? {
-        val folder = File(path).parent ?: return null
+        val folder = parentOf(path) ?: return null
         val h = history.folder(folder)
         val queue = ordered(queue(folder, legacyCharset), h)
         val index = queue.indexOfFirst { it.path == path }

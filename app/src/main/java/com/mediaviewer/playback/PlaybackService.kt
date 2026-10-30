@@ -23,6 +23,8 @@ import com.mediaviewer.MainActivity
 import com.mediaviewer.MediaViewerApp
 import com.mediaviewer.data.history.BookFolder
 import com.mediaviewer.data.history.ResumePoint
+import com.mediaviewer.data.mtp.MediaSources
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.domain.Book
 import com.mediaviewer.domain.Skip
 import com.mediaviewer.domain.model.FileEntry
@@ -67,6 +69,8 @@ class PlaybackService : MediaSessionService() {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             .setEnableDecoderFallback(true)
         player = ExoPlayer.Builder(this, renderers)
+            // Books on a camera or phone over USB play from the device (todo §11.4).
+            .setMediaSourceFactory(MediaSources.factory(this, app.mtp::connection))
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).build(),
                 /* handleAudioFocus = */ true,
@@ -141,7 +145,7 @@ class PlaybackService : MediaSessionService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> =
-            Futures.immediateFuture(mediaItems.mapTo(ArrayList()) { it.buildUpon().setUri(Uri.fromFile(File(it.mediaId))).build() })
+            Futures.immediateFuture(mediaItems.mapTo(ArrayList()) { it.buildUpon().setUri(uriOf(it.mediaId)).build() })
 
         /** Bluetooth / headset Play after the app was killed: continue the last book. */
         override fun onPlaybackResumption(
@@ -201,7 +205,7 @@ class PlaybackService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
                 currentPath?.let { write(it, 0, finished = true) }
-                val folder = currentPath?.let { File(it).parent }
+                val folder = currentPath?.let(BookFolder::parentOf)
                 if (folder != null) app.appScope.launch(Dispatchers.IO) { app.history.markBookFinished(folder, true) }
                 stopWhenIdle()
             }
@@ -248,7 +252,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun write(path: String, positionMs: Long, finished: Boolean) {
-        val folder = File(path).parent ?: return
+        val folder = BookFolder.parentOf(path) ?: return
         val speed = player.playbackParameters.speed
         // Where we are in the book, for the folder tiles (todo §10.1).
         val total = player.mediaItemCount
@@ -260,7 +264,8 @@ class PlaybackService : MediaSessionService() {
         val duration = if (index == player.currentMediaItemIndex && player.duration != C.TIME_UNSET) player.duration else 0L
         // The app scope, so a save started in onDestroy still completes.
         app.appScope.launch(Dispatchers.IO) {
-            app.history.save(folder, path, File(path).length(), positionMs, finished, speed, index, total, duration)
+            val size = if (MtpPaths.isMtp(path)) app.mtp.connection(path)?.sizeOf(path)?.takeIf { it >= 0 } ?: 0L else File(path).length()
+            app.history.save(folder, path, size, positionMs, finished, speed, index, total, duration)
         }
     }
 
@@ -279,6 +284,9 @@ class PlaybackService : MediaSessionService() {
         private const val IDLE_STOP_MS = 30 * 60_000L
 
         /** Media items for [point]'s queue. The media ID is the file path. */
+        /** A local file, or a file on a camera or phone over USB, streamed (todo §11.4). */
+        fun uriOf(path: String): Uri = if (MtpPaths.isMtp(path)) Uri.parse(path) else Uri.fromFile(File(path))
+
         fun mediaItems(point: ResumePoint): List<MediaItem> {
             val book = File(point.folder).name
             return point.queue.map { e -> mediaItem(e, book) }
@@ -287,7 +295,7 @@ class PlaybackService : MediaSessionService() {
         private fun mediaItem(e: FileEntry, book: String): MediaItem =
             MediaItem.Builder()
                 .setMediaId(e.path)
-                .setUri(Uri.fromFile(File(e.path)))
+                .setUri(uriOf(e.path))
                 .setMediaMetadata(
                     MediaMetadata.Builder()
                         .setTitle(e.name)

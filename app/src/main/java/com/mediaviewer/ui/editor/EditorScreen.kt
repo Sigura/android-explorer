@@ -272,7 +272,7 @@ fun EditorScreen(vm: AppViewModel, screen: Screen.Editor) {
                 val view = EditorView(colours, settings.editorLineNumbers, settings.editorWhitespace)
                 // A chosen theme's selection colours; *Default* keeps the app's.
                 CompositionLocalProvider(LocalTextSelectionColors provides (colours.selection ?: LocalTextSelectionColors.current)) {
-                    if (state.doc.readOnly) ReadOnlyText(state, settings.editorTextSp, code, view) else EditText(state, settings.editorTextSp, settings.editorWrap, code, view)
+                    if (state.doc.readOnly) ReadOnlyText(state, settings.editorTextSp, settings.editorWrap, code, view) else EditText(state, settings.editorTextSp, settings.editorWrap, code, view)
                 }
             }
         }
@@ -492,14 +492,28 @@ private fun DrawScope.drawWhitespace(
     }
 }
 
-/** Files from 1 to 10 MB: shown line by line, which stays fast where a text field would not. */
+/** The lines of a read-only file, where each starts, and the index of the longest (-1: none). */
+private data class ReadOnlyLines(val lines: List<String>, val starts: IntArray, val longest: Int)
+
+/** Without wrap, read-only lines are measured and shown up to this many characters (todo §11.2). */
+private const val MAX_LINE_CHARS = 2_000
+
+/**
+ * Files from 1 to 10 MB: shown line by line, which stays fast where a text field would not. With
+ * wrap off (todo §11.2) the whole list scrolls sideways together, as wide as its longest line.
+ */
 @Composable
-private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily, view: EditorView) {
+private fun ReadOnlyText(state: EditorState, sp: Int, wrap: Boolean, code: FontFamily, view: EditorView) {
     val colours = view.colours
     val style = textStyle(state, sp, code, colours.text)
-    // Lines and where each starts (for find), both off the main thread: up to 10 MB.
-    val split by produceState(emptyList<String>() to IntArray(0), state.doc) {
-        value = withContext(Dispatchers.Default) { state.doc.text.split('\n') to TextSearch.lineStarts(state.doc.text) }
+    // Lines, where each starts (for find) and the longest one, all off the main thread: up to 10 MB.
+    val split by produceState(ReadOnlyLines(emptyList(), IntArray(0), -1), state.doc) {
+        value = withContext(Dispatchers.Default) {
+            val lines = state.doc.text.split('\n')
+            var longest = -1
+            for (i in lines.indices) if (longest < 0 || lines[i].length > lines[longest].length) longest = i
+            ReadOnlyLines(lines, TextSearch.lineStarts(state.doc.text), longest)
+        }
     }
     val (lines, starts) = split
     val list = rememberLazyListState()
@@ -513,8 +527,24 @@ private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily, view: Ed
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val gutter = with(density) { gutterWidth(measurer, numberStyle, lines.size, GUTTER_GAP.toPx()).toDp() }
-    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-        itemsIndexed(lines) { i, line ->
+    // Without wrap: the longest line by characters, measured once (cut at MAX_LINE_CHARS; a
+    // proportional font gets some slack, since another line may have wider letters).
+    val mono = style.fontFamily == code
+    val widest = remember(split, style, wrap) {
+        if (wrap || split.longest < 0) 0
+        else measurer.measure(lines[split.longest].take(MAX_LINE_CHARS), style, softWrap = false, maxLines = 1).size.width.let { if (mono) it else it * 5 / 4 }
+    }
+    val scrollH = rememberScrollState()
+    val listModifier = if (wrap) {
+        Modifier.fillMaxSize()
+    } else {
+        val content = with(density) { widest.toDp() } + (if (view.lineNumbers) gutter else 0.dp) + 24.dp
+        Modifier.fillMaxSize().horizontalScroll(scrollH).widthIn(min = content)
+    }
+    LazyColumn(listModifier, state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+        itemsIndexed(lines) { i, full ->
+            // Without wrap a line is cut where the sideways scroll ends, so a minified 1 MB line isn't laid out whole.
+            val line = if (wrap) full else full.take(MAX_LINE_CHARS)
             val text = if (marks.starts.isEmpty() || i >= starts.size) {
                 AnnotatedString(line)
             } else {
@@ -525,10 +555,10 @@ private fun ReadOnlyText(state: EditorState, sp: Int, code: FontFamily, view: Ed
             if (view.lineNumbers) {
                 Row {
                     Text("${i + 1}", style = numberStyle, modifier = Modifier.width(gutter).padding(end = GUTTER_GAP / 2))
-                    Text(text, style = style)
+                    Text(text, style = style, softWrap = wrap, maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = TextOverflow.Clip)
                 }
             } else {
-                Text(text, style = style)
+                Text(text, style = style, softWrap = wrap, maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = TextOverflow.Clip)
             }
         }
     }
@@ -618,14 +648,12 @@ private fun EditorBar(
                             StepSlider(EDITOR_TEXT_STEPS, textSp, Icons.Rounded.FormatSize, "Text size", width = 200.dp, onChange = onTextSize)
                         }
                     }
-                    if (!readOnly) {
-                        DropdownMenuItem(
-                            text = { Text("Wrap lines") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.WrapText, contentDescription = null) },
-                            trailingIcon = { Checkbox(checked = wrap, onCheckedChange = null) },
-                            onClick = { onWrap(!wrap) },
-                        )
-                    }
+                    DropdownMenuItem(
+                        text = { Text("Wrap lines") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Rounded.WrapText, contentDescription = null) },
+                        trailingIcon = { Checkbox(checked = wrap, onCheckedChange = null) },
+                        onClick = { onWrap(!wrap) },
+                    )
                     DropdownMenuItem(
                         text = { Text("Line numbers") },
                         leadingIcon = { Icon(Icons.Rounded.FormatListNumbered, contentDescription = null) },

@@ -4,6 +4,8 @@ import com.mediaviewer.data.mtp.MtpConnectionTest.Companion.D
 import com.mediaviewer.data.mtp.MtpConnectionTest.Companion.S
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -96,5 +98,18 @@ class MtpMirrorTest {
         mirror.fetch(e)
         assertEquals(1, dev.calls.count { it == "readPartial" })
         assertNull(MtpMirror(File(tmp, "m"), { null }).fetch(e))
+    }
+
+    @Test
+    fun `the same file asked for twice at once is downloaded once`() = runBlocking {
+        dev.file(S, MtpFormats.ROOT, "big.jpg", ByteArray(3 * 1024 * 1024) { it.toByte() })
+        dev.delayMs["readPartial"] = 30
+        val e = conn.list(root).single()
+        val mirror = MtpMirror(File(tmp, "m"), { conn })
+        val a = async(Dispatchers.Default) { mirror.fetch(e) }
+        val b = async(Dispatchers.Default) { mirror.fetch(e) }
+        assertEquals(a.await(), b.await())
+        assertEquals(3, dev.calls.count { it == "readPartial" })
+        assertEquals(e.size, a.await()!!.length())
     }
 }

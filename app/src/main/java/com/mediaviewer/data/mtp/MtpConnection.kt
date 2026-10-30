@@ -43,7 +43,8 @@ import kotlin.coroutines.coroutineContext
  * Pure Kotlin over an [MtpDriver], so tests run it against a fake device.
  */
 class MtpConnection(
-    val deviceId: Int,
+    /** The device's key in paths (`MtpPaths.deviceKey`). */
+    val key: String,
     private val device: MtpDriver,
     private val timeouts: Timeouts = Timeouts(),
 ) {
@@ -70,7 +71,7 @@ class MtpConnection(
     /** What the listing learnt about a file: enough for thumbnails and downloads without asking again. */
     private class Obj(val handle: Int, val storageId: Int, val folder: Boolean, val size: Long, val hasThumb: Boolean)
 
-    private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "mtp-$deviceId").apply { isDaemon = true } }
+    private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "mtp-$key").apply { isDaemon = true } }
     private val scope = CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
     private val objects = ConcurrentHashMap<String, Obj>()
 
@@ -209,7 +210,7 @@ class MtpConnection(
     private suspend fun resolve(path: String): Obj? {
         objects[path]?.let { return it }
         val parts = MtpPaths.parse(path) ?: return null
-        var dir = MtpPaths.storageRoot(parts.deviceId, parts.storageId)
+        var dir = MtpPaths.storageRoot(parts.device, parts.storageId)
         var handle = MtpFormats.ROOT
         for (seg in parts.segments) {
             val target = MtpPaths.child(dir, seg)
@@ -289,6 +290,31 @@ class MtpConnection(
         } finally {
             tmp.delete()
         }
+    }
+
+    /**
+     * [path] as a stream for players (todo §11.4): partial reads through a read-ahead window, run
+     * in [scope]. Null when the device can't read it partially (no GetPartialObject, or a file past
+     * 4 GB without GetPartialObject64): such files go through the mirror instead.
+     */
+    suspend fun stream(path: String, scope: CoroutineScope): MtpStream? {
+        val o = resolve(path) ?: throw IOException("not found")
+        if (o.folder) throw IOException("is a folder")
+        if (!canStream(o.size)) return null
+        val handle = o.handle
+        return MtpStream(o.size, scope) { offset, size -> readAt(handle, offset, size) }
+    }
+
+    /** Whether [path] (as listed) can be streamed; unknown files: whether the device reads partially at all. */
+    fun streams(path: String): Boolean = objects[path]?.let { !it.folder && canStream(it.size) } ?: device.canReadPartially
+
+    private fun canStream(size: Long): Boolean = device.canReadPartially && size >= 0 && (size < MAX_32 || device.canReadPartially64)
+
+    /** One partial read of up to [size] bytes at [offset], under the chunk watchdog. */
+    private suspend fun readAt(handle: Int, offset: Long, size: Int): ByteArray {
+        val buf = ByteArray(size)
+        val n = call(timeouts.chunk) { it.readPartial(handle, offset, size.toLong(), buf) }
+        return if (n == size.toLong()) buf else buf.copyOf(n.coerceIn(0, size.toLong()).toInt())
     }
 
     /**
@@ -406,7 +432,7 @@ class MtpConnection(
                 errors = 0
                 eventScope.launch { handle(ev) }
             }
-        }, "mtp-events-$deviceId").apply {
+        }, "mtp-events-$key").apply {
             isDaemon = true
             start()
         }
@@ -420,7 +446,7 @@ class MtpConnection(
                 } catch (e: IOException) {
                     null
                 } ?: return
-                val dir = if (info.parent == MtpFormats.ROOT || info.parent == 0) MtpPaths.storageRoot(deviceId, info.storageId)
+                val dir = if (info.parent == MtpFormats.ROOT || info.parent == 0) MtpPaths.storageRoot(key, info.storageId)
                 else paths[info.parent] ?: return
                 // A rename leaves the old name behind.
                 paths[info.handle]?.let { old -> if (MtpPaths.parent(old) == dir && old != MtpPaths.child(dir, info.name ?: "")) removed(old) }
@@ -450,6 +476,7 @@ class MtpConnection(
 
     companion object {
         private const val CHUNK = 1024 * 1024
+        private const val MAX_32 = 0xFFFF_FFFFL
         private const val INFO_BATCH = 16
         private const val BATCH_SIZE = 50
         private const val BATCH_MS = 16L

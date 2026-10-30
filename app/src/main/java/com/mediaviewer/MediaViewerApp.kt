@@ -12,16 +12,19 @@ import coil3.memory.MemoryCache
 import com.mediaviewer.data.CrashHandler
 import com.mediaviewer.data.ErrorReporter
 import com.mediaviewer.data.fs.Trash
+import com.mediaviewer.data.history.BookFolder
 import com.mediaviewer.data.history.HistoryStore
 import com.mediaviewer.data.meta.MetaStore
 import com.mediaviewer.data.mtp.MtpDevices
 import com.mediaviewer.data.settings.SettingsStore
 import com.mediaviewer.data.thumbs.TextDecode
 import com.mediaviewer.data.thumbs.Thumbnails
+import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.playback.BookPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
 
 /** Manual dependency container; the app is small enough not to need Hilt. */
 class MediaViewerApp : Application(), SingletonImageLoader.Factory {
@@ -40,7 +43,7 @@ class MediaViewerApp : Application(), SingletonImageLoader.Factory {
     }
 
     /** Cameras and phones over USB (todo §9). */
-    val mtp by lazy { MtpDevices(this, appScope) }
+    val mtp by lazy { MtpDevices(this, appScope, settings) }
 
     /** Listening history (todo §3.4): user data, unlike [meta]. */
     val history by lazy { HistoryStore(this) }
@@ -61,6 +64,20 @@ class MediaViewerApp : Application(), SingletonImageLoader.Factory {
         // The crash screen's own process needs nothing else (README §3.5).
         if (CrashHandler.isCrashProcess(this)) return
         CrashHandler.install(this)
+        // Books on a camera or phone over USB (todo §11.4): their folders come from the device.
+        BookFolder.device = object : BookFolder.Device {
+            override fun list(folder: String): List<FileEntry>? = try {
+                runBlocking { mtp.connection(folder)?.list(folder, showHidden = false) }
+            } catch (e: java.io.IOException) {
+                null
+            }
+
+            override fun copyOf(entry: FileEntry): java.io.File? = try {
+                runBlocking { mtp.mirror.fetch(entry) }
+            } catch (e: java.io.IOException) {
+                null
+            }
+        }
         if (BuildConfig.DEBUG) {
             // README §8: no main-thread disk I/O.
             StrictMode.setThreadPolicy(

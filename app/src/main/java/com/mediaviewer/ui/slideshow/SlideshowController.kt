@@ -1,5 +1,6 @@
 package com.mediaviewer.ui.slideshow
 
+import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.Stable
@@ -14,8 +15,10 @@ import com.mediaviewer.data.fs.FolderScanner
 import com.mediaviewer.data.fs.TAG
 import com.mediaviewer.data.history.FileHistory
 import com.mediaviewer.data.meta.MediaMeta
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.settings.SlideshowSession
 import com.mediaviewer.domain.Book
+import com.mediaviewer.domain.SlideNav
 import com.mediaviewer.domain.SlideOrder
 import com.mediaviewer.domain.SlideTimer
 import com.mediaviewer.domain.SlideTiming
@@ -23,17 +26,21 @@ import com.mediaviewer.domain.Sorting
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import com.mediaviewer.ui.AppViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.IOException
 
 /**
  * Slideshow state (README §5, §6, §7.3): the order, the current item and its timing, pause,
@@ -79,8 +86,15 @@ class SlideshowController(
     var videoPositionMs = 0L
     /** Playback position of a video or GIF on screen, set by the screen; read when the user leaves it. */
     var positionOf: (FileEntry) -> Long = { 0L }
-    /** Decodes an image into the cache the screen draws it from; the result is kept until the next preload. */
-    var preloadImage: suspend (FileEntry) -> Any? = { null }
+    /**
+     * Gets an item ready to be shown (todo §11.1), set by the screen: an image decoded into the
+     * cache the slide draws it from, a GIF's block scan, a video prepared in the spare player at
+     * the given position. Returns null when the item is ready, else why it can't be shown.
+     */
+    var prepare: suspend (FileEntry, Long) -> String? = { _, _ -> null }
+    /** A manual step waits for its target to be ready (todo §11.1): the screen shows a small spinner. */
+    var waiting by mutableStateOf(false)
+        private set
     /**
      * Bumped when the app is visible again; restarts the timer. Composition is paused while the
      * app is stopped, so a "stopped" flag that went on and off again would never reach the screen.
@@ -111,14 +125,11 @@ class SlideshowController(
     private var stopped = false
     /** The item ended while paused, in the menu or in the background; it advances when the timer runs again. */
     private var endedInMenu = false
-    /** Path of the item being preloaded for the next step, and its preload. */
-    private var preload: Pair<String, Job>? = null
-    /** Where the last [MAX_VISITS] items were left, so "previous" goes on from there. */
-    private val visits = object : LinkedHashMap<String, Visit>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Visit>?) = size > MAX_VISITS
-    }
-
-    private class Visit(val elapsedMs: Long, val showMs: Long, val positionMs: Long)
+    /** Items being prepared ahead (next, previous, a manual step's target), by path; the oldest is dropped. */
+    private val preloads = LinkedHashMap<String, Deferred<String?>>()
+    /** Where the last [MAX_VISITS] items were left, and the manual step waiting for its target. */
+    private val nav = SlideNav(MAX_VISITS, MIN_LEFT_MS)
+    private var waitJob: Job? = null
 
     /**
      * Listening positions of this folder's files (todo §3.6): a lecture listened to halfway starts
@@ -129,13 +140,34 @@ class SlideshowController(
     init {
         scope.launch {
             listened = vm.listenPositions(listing.path)
-            val e = withContext(Dispatchers.IO) { FolderScanner.entryFor(File(startPath), true) }
+            // A device folder (todo §11.4) is already listed; its files have no local path.
+            val e = if (onDevice) listing.snapshot().firstOrNull { it.path == startPath }
+            else withContext(Dispatchers.IO) { FolderScanner.entryFor(File(startPath), true) }
             if (e == null) {
                 vm.errors.notify("File not found", startPath)
             }
             show(e ?: placeholder(startPath), 1, auto = false)
             buildOrder(startPath)
         }
+    }
+
+    /** The slideshow runs over a folder on a camera or phone (todo §11.4); it is never resumed after a restart. */
+    val onDevice: Boolean = MtpPaths.isMtp(listing.path)
+
+    /**
+     * The local file a slide decodes: the file itself, or for a device file its copy in the
+     * mirror, downloaded now unless it is there already (todo §11.4). Throws when it can't be had.
+     */
+    suspend fun localFile(e: FileEntry): File {
+        if (!MtpPaths.isMtp(e.path)) return File(e.path)
+        return withContext(Dispatchers.IO) { vm.mtp.mirror.fetch(e) } ?: throw IOException("Device disconnected")
+    }
+
+    /** What the player opens: a local file, a device file streamed, or its mirror copy when the device can't stream. */
+    suspend fun videoUri(e: FileEntry): Uri = when {
+        !MtpPaths.isMtp(e.path) -> Uri.fromFile(File(e.path))
+        vm.mtp.streams(e.path) -> Uri.parse(e.path)
+        else -> Uri.fromFile(localFile(e))
     }
 
     private fun placeholder(path: String): FileEntry {
@@ -204,16 +236,105 @@ class SlideshowController(
 
     fun next(auto: Boolean = false) {
         val o = order ?: return waitForOrder(1)
+        if (!auto) return step(1)
         val n = o.next() ?: return
         updateProgress()
         show(n, 1, auto)
     }
 
     fun previous() {
-        val o = order ?: return waitForOrder(-1)
-        val p = o.previous() ?: return
+        if (order == null) return waitForOrder(-1)
+        step(-1)
+    }
+
+    /**
+     * A manual Next (+1) or Previous (-1), todo §11.1: the item on screen stays until the target is
+     * ready, then the switch happens. A second press the same way moves the target on, the opposite
+     * press cancels; a target that can't be read is skipped.
+     */
+    private fun step(dir: Int) {
+        val o = order ?: return
+        if (single) return
+        // After the last item of a random cycle the next one isn't known until the new cycle starts.
+        if (nav.wait == null && dir > 0 && o.peek(1) == null) {
+            val n = o.next() ?: return
+            updateProgress()
+            show(n, 1, auto = false)
+            return
+        }
+        when (val a = nav.press(dir, ::reachable)) {
+            is SlideNav.Action.Go -> waitFor(a.offset)
+            SlideNav.Action.Cancel -> endWait()
+            SlideNav.Action.Stay -> Unit
+        }
+    }
+
+    /** An item [offset] steps away exists, and isn't the one on screen again. */
+    private fun reachable(offset: Int): Boolean {
+        val o = order ?: return false
+        return kotlin.math.abs(offset) < o.size && o.peek(offset) != null
+    }
+
+    private fun waitFor(offset: Int) {
+        val o = order ?: return
+        val target = o.peek(offset) ?: return cancelWait()
+        waitJob?.cancel()
+        val job = preload(target)
+        waitJob = scope.launch {
+            val mark = launch {
+                delay(SPINNER_DELAY_MS)
+                waiting = true
+            }
+            // Not ready within the cap (null): the switch happens anyway, with the wait indicator.
+            val failure = withTimeoutOrNull(MAX_PRELOAD_WAIT_MS) {
+                try {
+                    job.await()
+                } catch (e: CancellationException) {
+                    // The preload was dropped for a newer one, not this wait: show the target as it is.
+                    currentCoroutineContext().ensureActive()
+                    null
+                }
+            }
+            mark.cancel()
+            if (failure != null) {
+                // Skipped like an unreadable item reached automatically, with the grouped message.
+                vm.errors.readError(target.path, failure)
+                preloads.remove(target.path)
+                when (val a = nav.failed(::reachable)) {
+                    is SlideNav.Action.Go -> waitFor(a.offset)
+                    else -> endWait()
+                }
+                return@launch
+            }
+            commit(target, if (offset > 0) 1 else -1)
+        }
+    }
+
+    private fun commit(target: FileEntry, dir: Int) {
+        val o = order ?: return
+        waitJob = null
+        cancelWait()
+        // Deleted while waiting: the item on screen stays.
+        val e = o.moveTo(target.path) ?: return endWait()
         updateProgress()
-        show(p, -1, auto = false)
+        show(e, dir, auto = false)
+    }
+
+    /**
+     * A wait ended without a switch (cancelled, nothing left to skip to, the target deleted): an
+     * item that ended meanwhile moves on now, since the timer held it back for the step.
+     */
+    private fun endWait() {
+        cancelWait()
+        val e = current
+        if (e != null && endedInMenu && !paused && !menuOpen && !stopped) scope.launch { advanceFrom(e) }
+    }
+
+    private fun cancelWait() {
+        waitJob?.cancel()
+        waitJob = null
+        nav.done()
+        waiting = false
     }
 
     /** Time the current item has been on screen so far, excluding pauses and the open menu. */
@@ -226,17 +347,16 @@ class SlideshowController(
 
     private fun show(e: FileEntry, dir: Int, auto: Boolean) {
         if (!auto) skipsInRow = 0
-        // Remember where the item on screen was left; going back to it goes on from there.
+        // Anything else that changes the item (a skip, a delete, the timer) ends a manual wait.
+        cancelWait()
+        // Remember where the item on screen was left; going back or forward to it goes on from there.
         current?.let { old ->
             val t = timing
-            val shown = shownMs()
-            if (t != null && shown > 0) {
-                visits[old.path] = Visit(shown, t.showMs, positionOf(old))
-            }
+            if (t != null) nav.leave(old.path, shownMs(), t.showMs, positionOf(old))
             saveListened(old)
         }
         // An item that was shown to its end, or nearly, starts over instead of flashing by.
-        val visit = if (dir < 0) visits.remove(e.path)?.takeIf { it.showMs - it.elapsedMs >= MIN_LEFT_MS } else null
+        val visit = nav.resume(e.path)
         if (visit != null) Log.d(TAG, "Slideshow: back to ${e.name} at ${visit.elapsedMs} ms, position ${visit.positionMs} ms")
         val firstShow = generation == 0
         direction = dir
@@ -253,8 +373,7 @@ class SlideshowController(
         resumePositionMs = when {
             visit != null -> visit.positionMs
             firstShow && resume?.current == e.path -> resume.positionMs
-            e.type == MediaType.VIDEO -> listened[e.path]?.takeIf { !it.finished }?.positionMs ?: 0L
-            else -> 0L
+            else -> startPositionOf(e)
         }
         videoPositionMs = resumePositionMs
         vm.thumbnails.clearFailure(e.path)
@@ -263,7 +382,9 @@ class SlideshowController(
         if (e.type == MediaType.ANIMATED) {
             scope.launch {
                 meta = try {
-                    vm.thumbnails.gifMeta(e)
+                    vm.thumbnails.gifMeta(if (MtpPaths.isMtp(e.path)) e.copy(path = localFile(e).path) else e)
+                } catch (ex: kotlinx.coroutines.CancellationException) {
+                    throw ex
                 } catch (ex: Exception) {
                     null
                 }
@@ -303,36 +424,65 @@ class SlideshowController(
         if (visible) armNotReady(e, auto = true) else notReadyJob?.cancel()
     }
 
-    /** Starts preloading the item "next" would move to, unless it already is. */
-    private fun preloadNext(): Job? {
-        val n = order?.peekNext() ?: return null
-        preload?.let { (path, job) ->
-            if (path == n.path) return job
-            job.cancel()
+    /** A video starts where it was listened to (todo §3.6); other items from the start. */
+    private fun startPositionOf(e: FileEntry): Long =
+        if (e.type == MediaType.VIDEO) listened[e.path]?.takeIf { !it.finished }?.positionMs ?: 0L else 0L
+
+    /**
+     * Starts getting [e] ready, unless it already is being. A failure is not reported here: a
+     * manual step reports and skips it, an automatic one when it is shown.
+     */
+    private fun preload(e: FileEntry): Deferred<String?> {
+        preloads[e.path]?.let { p ->
+            // A finished video preload may have lost the spare player to another video since.
+            if (!p.isCancelled && !(e.type == MediaType.VIDEO && p.isCompleted)) return p
         }
+        val start = nav.peekResume(e.path)?.positionMs ?: startPositionOf(e)
         val job = scope.async {
             try {
-                when (n.type) {
-                    MediaType.IMAGE -> preloadImage(n)
-                    MediaType.ANIMATED -> vm.thumbnails.gifMeta(n)
-                    else -> null
-                }
-            } catch (ex: kotlinx.coroutines.CancellationException) {
+                prepare(e, start)
+            } catch (ex: CancellationException) {
                 throw ex
             } catch (ex: Exception) {
-                // Not reported here: the item reports its own failure when it is shown.
-                null
+                ex.message ?: ex.javaClass.simpleName
             }
         }
-        preload = n.path to job
+        preloads.remove(e.path)
+        preloads[e.path] = job
+        while (preloads.size > MAX_PRELOADS) {
+            val oldest = preloads.keys.first()
+            preloads.remove(oldest)?.cancel()
+        }
         return job
+    }
+
+    /**
+     * Starts preloading the item "next" would move to. A video takes the spare player, so it is
+     * prepared only shortly before it is due ([video]), and not while a manual step uses it.
+     */
+    private fun preloadNext(video: Boolean = true): Deferred<String?>? {
+        val n = order?.peekNext() ?: return null
+        if (n.type == MediaType.VIDEO && (!video || nav.wait != null)) return null
+        if (n.path == current?.path) return null
+        return preload(n)
+    }
+
+    /** The item Previous goes to, so Back is instant (todo §11.1); not a video, which would take the spare player. */
+    private fun preloadPrevious() {
+        val p = order?.peek(-1) ?: return
+        if (p.type != MediaType.VIDEO && p.path != current?.path) preload(p)
     }
 
     /** Moves on once the next item is preloaded; until then the current one stays on screen. */
     private suspend fun advanceFrom(e: FileEntry) {
+        // A manual step is about to switch: it goes first; if it is cancelled, the item moves on then.
+        if (nav.wait != null) {
+            endedInMenu = true
+            return
+        }
         preloadNext()?.let { withTimeoutOrNull(MAX_PRELOAD_WAIT_MS) { it.join() } }
         if (current !== e) return
-        if (paused || menuOpen || stopped) endedInMenu = true else next(auto = true)
+        if (paused || menuOpen || stopped || nav.wait != null) endedInMenu = true else next(auto = true)
     }
 
     private fun loadingLabel(e: FileEntry): String {
@@ -383,7 +533,8 @@ class SlideshowController(
                 timing = SlideTimer.timing(null, intervalMs())
             }
         }
-        preloadNext()
+        preloadNext(video = false)
+        preloadPrevious()
     }
 
     /** README §2.1 / §5.3: unreadable items are skipped automatically, with a grouped message. */
@@ -463,6 +614,7 @@ class SlideshowController(
         vm.closeSlideshow(current?.path)
     }
 
+    /** Saved for device folders too, so Back knows the last item; the app never resumes those (todo §11.4). */
     fun saveSession(force: Boolean = false) {
         val now = SystemClock.uptimeMillis()
         if (!force && now - lastSave < 1000) return
@@ -515,6 +667,10 @@ class SlideshowController(
     }
 
     private companion object {
+        /** A manual step that waits longer than this shows a small spinner (todo §11.1). */
+        const val SPINNER_DELAY_MS = 300L
+        /** Next, previous and a manual target; one more for a target moved on while waiting. */
+        const val MAX_PRELOADS = 4
         const val MAX_VISITS = 15
         /** Going back to an item with less time than this left starts it over. */
         const val MIN_LEFT_MS = 2_000L

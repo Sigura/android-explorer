@@ -24,6 +24,15 @@ object DropImport {
         else -> null
     }
 
+    /**
+     * The paths behind [uris] when every one is this app's own tile (a drag from this window or
+     * another window of the app, todo §11.3) on shared storage; null when any comes from another app.
+     */
+    fun ownPaths(context: Context, uris: List<Uri>): List<String>? {
+        val own = context.packageName + ".files"
+        return uris.map { u -> localPath(u, own)?.takeIf { isShared(context, it) } ?: return null }
+    }
+
     /** `/root/storage/emulated/0/a%20b.jpg` (our `root-path name="root"`) → `/storage/emulated/0/a b.jpg`. */
     fun localPathOf(encodedPath: String?): String? {
         val p = Uri.decode(encodedPath ?: return null)
@@ -58,13 +67,15 @@ object DropImport {
                 }
                 continue
             }
-            val name = displayName(resolver, uri)
+            // A folder shared as a tree (todo §11.3) is read through its tree's top document.
+            val doc = treeDocument(uri) ?: uri
+            val name = displayName(resolver, doc)
             onProgress(i, uris.size, name)
             try {
-                if (resolver.getType(uri) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                if (doc !== uri || type(resolver, uri) == DocumentsContract.Document.MIME_TYPE_DIR) {
                     val target = FileOps.freeName(dest, name)
                     try {
-                        copyTree(resolver, uri, target)
+                        copyTree(resolver, doc, target)
                     } catch (e: Throwable) {
                         target.deleteRecursively() // no half-copied folder left behind
                         throw e
@@ -81,11 +92,32 @@ object DropImport {
             }
         }
         if (local.isNotEmpty()) {
-            val r = FileOps.transfer(local, destDir, move = false) { i, _, name -> onProgress(uris.size - local.size + i, uris.size, name) }
+            val r = FileOps.transfer(local, destDir, move = false, onProgress = { i, _, name -> onProgress(uris.size - local.size + i, uris.size, name) })
             done += r.done
             failed.addAll(r.failed)
         }
         return FileOps.Result(done, failed)
+    }
+
+    /**
+     * `content://a/tree/X` (a whole folder, from `ACTION_OPEN_DOCUMENT_TREE` or a drag that shares
+     * one) → `content://a/tree/X/document/X`, its top document, which can be queried and listed.
+     * Null for anything else (a single document, `tree/X/document/Y` included).
+     */
+    private fun treeDocument(uri: Uri): Uri? {
+        val seg = uri.pathSegments
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT || seg.size != 2 || seg[0] != "tree") return null
+        return try {
+            DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private fun type(resolver: ContentResolver, uri: Uri): String? = try {
+        resolver.getType(uri)
+    } catch (e: Exception) {
+        null
     }
 
     /** Not inside app-private storage (ours or another app's): `/data/…`, or our folders under `Android/`. */
@@ -123,10 +155,12 @@ object DropImport {
         if (mtime > 0) target.setLastModified(mtime)
     }
 
-    /** A dropped folder (a document URI): its children through the provider (**verify** that drags grant this). */
+    /**
+     * A dropped folder: its children through the provider. That needs a tree URI; a drag that
+     * shares a single folder document can't be listed, and says so (**verify** what My Files,
+     * Files by Google and Chrome send).
+     */
     private suspend fun copyTree(resolver: ContentResolver, uri: Uri, target: File) {
-        val docId = DocumentsContract.getDocumentId(uri)
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(uri, docId)
         val cols = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -134,6 +168,7 @@ object DropImport {
             DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
         val rows: List<List<String>> = try {
+            val children = DocumentsContract.buildChildDocumentsUriUsingTree(uri, DocumentsContract.getDocumentId(uri))
             resolver.query(children, cols, null, null, null)?.use { c ->
                 buildList<List<String>> {
                     while (c.moveToNext()) add(listOf(c.getString(0) ?: "", c.getString(1) ?: "file", c.getString(2) ?: "", if (c.isNull(3)) "0" else c.getLong(3).toString()))

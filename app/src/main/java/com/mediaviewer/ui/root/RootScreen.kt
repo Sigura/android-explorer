@@ -1,6 +1,9 @@
 package com.mediaviewer.ui.root
 
+import android.app.Activity
+import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -39,19 +42,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import com.mediaviewer.data.fs.Volume
 import com.mediaviewer.data.history.FolderHistory
 import com.mediaviewer.data.mtp.MtpDevices
+import com.mediaviewer.data.mtp.MtpPaths
 import com.mediaviewer.data.thumbs.Still
 import com.mediaviewer.data.thumbs.Thumb
 import com.mediaviewer.data.thumbs.Thumbnails
@@ -59,6 +66,7 @@ import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import com.mediaviewer.ui.AppViewModel
 import com.mediaviewer.ui.browser.Collage
+import com.mediaviewer.ui.browser.FileDrop
 import com.mediaviewer.ui.browser.LocalThumbnails
 import com.mediaviewer.ui.Overlay
 import com.mediaviewer.ui.common.formatSize
@@ -81,6 +89,11 @@ fun RootScreen(vm: AppViewModel) {
         vm.mtp.refresh()
     }
     val pad = WindowInsets.safeDrawing.asPaddingValues()
+    // Recent folders and favourites on a camera or phone (todo §11.4): dimmed while it is unplugged.
+    val ready = devices.filter { it.state == MtpDevices.State.READY }.mapNotNullTo(HashSet()) { it.key }
+    fun absent(path: String) = MtpPaths.deviceOf(path)?.let { it !in ready } == true
+    fun where(path: String, parent: String): String =
+        if (MtpPaths.isMtp(path)) (vm.mtp.nameOf(path) ?: "Device") + (if (absent(path)) " · not connected" else "") else parent
 
     LazyColumn(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
@@ -130,9 +143,11 @@ fun RootScreen(vm: AppViewModel) {
                         BigFolderTile(
                             path = r.path,
                             name = r.path.substringAfterLast('/').ifEmpty { r.path },
-                            subtitle = r.path.substringBeforeLast('/'),
-                            onClick = { vm.openFolder(r.path, focus = r.lastViewed) },
+                            subtitle = where(r.path, r.path.substringBeforeLast('/')),
+                            onClick = { vm.openRemembered(r.path, focus = r.lastViewed) },
                             onLongClick = { vm.removeRecent(r.path) },
+                            onDrop = dropInto(vm, r.path),
+                            dimmed = absent(r.path),
                         )
                     }
                 }
@@ -141,14 +156,42 @@ fun RootScreen(vm: AppViewModel) {
         if (settings.favourites.isNotEmpty()) {
             item { SectionTitle("Favourites") }
             items(settings.favourites.sorted(), key = { "f:$it" }) { p ->
-                RootRow(Icons.Rounded.Star, p.substringAfterLast('/'), p, onClick = { vm.openFolder(p) }, onLongClick = { vm.toggleFavourite(p) })
+                RootRow(
+                    Icons.Rounded.Star, p.substringAfterLast('/'), where(p, p),
+                    onClick = { vm.openRemembered(p) }, onLongClick = { vm.toggleFavourite(p) }, onDrop = dropInto(vm, p), dimmed = absent(p),
+                )
             }
         }
         item { SectionTitle("Storage") }
         items(volumes, key = { "v:" + it.path }) { v ->
-            RootRow(volumeIcon(v), v.label, v.path, onClick = { vm.openFolder(v.path) }) { SpaceBar(v) }
+            RootRow(volumeIcon(v), v.label, v.path, onClick = { vm.openFolder(v.path) }, onDrop = dropInto(vm, v.path)) { SpaceBar(v) }
         }
     }
+}
+
+/**
+ * Home screen folders take drops too (todo §11.3): files from other apps, or this app's own
+ * tiles from another window, go into that folder as in the folder view. Device folders take none.
+ */
+private fun dropInto(vm: AppViewModel, path: String): DropTarget? =
+    if (MtpPaths.isMtp(path)) null else { uris, shift, release -> vm.importDropped(uris, path, shift, release) }
+
+/** Folders on a device that isn't plugged in. */
+private const val DIMMED = 0.45f
+
+private typealias DropTarget = (uris: List<Uri>, shift: Boolean, release: () -> Unit) -> Unit
+
+/** A drop target with the folder tile's outline while a drag with files is over it. */
+@Composable
+private fun Modifier.dropTarget(onDrop: DropTarget?, shape: RoundedCornerShape): Modifier {
+    if (onDrop == null) return this
+    var hover by remember { mutableStateOf(false) }
+    val activity = LocalContext.current as? Activity
+    val current by rememberUpdatedState(onDrop)
+    val target = remember { FileDrop(activity, onHover = { hover = it }) { uris, shift, release -> current(uris, shift, release) } }
+    return this
+        .dragAndDropTarget(shouldStartDragAndDrop = { FileDrop.accepts(it) }, target = target)
+        .then(if (hover) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, shape) else Modifier)
 }
 
 @Composable
@@ -183,13 +226,18 @@ private fun RootRow(
     subtitle: String,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    onDrop: DropTarget? = null,
+    /** On a device that isn't connected (todo §11.4). */
+    dimmed: Boolean = false,
     extra: @Composable () -> Unit = {},
 ) {
     var focused by remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
+            .alpha(if (dimmed) DIMMED else 1f)
             .padding(horizontal = 12.dp)
+            .dropTarget(onDrop, RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
             .then(if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier)
             .onFocusChanged { focused = it.isFocused }
@@ -208,7 +256,7 @@ private fun RootRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BigFolderTile(path: String, name: String, subtitle: String, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun BigFolderTile(path: String, name: String, subtitle: String, onClick: () -> Unit, onLongClick: () -> Unit, onDrop: DropTarget?, dimmed: Boolean = false) {
     var focused by remember { mutableStateOf(false) }
     // The same cheap-first collage as folder tiles (README §4.1, §7.2).
     val thumbs = LocalThumbnails.current
@@ -226,6 +274,8 @@ private fun BigFolderTile(path: String, name: String, subtitle: String, onClick:
     Column(
         Modifier
             .width(168.dp)
+            .alpha(if (dimmed) DIMMED else 1f)
+            .dropTarget(onDrop, RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .then(if (focused) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else Modifier)
             .background(MaterialTheme.colorScheme.surfaceVariant)

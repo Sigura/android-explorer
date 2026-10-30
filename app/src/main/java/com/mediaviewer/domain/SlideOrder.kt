@@ -47,11 +47,28 @@ class SlideOrder(
     val isEmpty: Boolean get() = order.isEmpty()
 
     /** Peek at the item [next] would move to, without moving. */
-    fun peekNext(): FileEntry? = when {
-        order.isEmpty() -> null
-        position + 1 < order.size -> order[position + 1]
-        random -> null // a new cycle has a new seed, not known yet
-        else -> order[0]
+    fun peekNext(): FileEntry? = peek(1)
+
+    /**
+     * The item [offset] steps away (negative = back), without moving: null before the start, and
+     * past the end in random order (a new cycle has a new seed, not known yet); name order wraps.
+     */
+    fun peek(offset: Int): FileEntry? {
+        if (order.isEmpty()) return null
+        val i = position + offset
+        return when {
+            i in order.indices -> order[i]
+            offset < 0 || random -> null
+            else -> order[i % order.size]
+        }
+    }
+
+    /** Makes [path] the current item (a target found with [peek]); null if it is no longer in the order. */
+    fun moveTo(path: String): FileEntry? {
+        val i = indexOf(path)
+        if (i < 0) return null
+        position = i
+        return current
     }
 
     /** Next item. After the last one, wraps around (a new random cycle in random order). */

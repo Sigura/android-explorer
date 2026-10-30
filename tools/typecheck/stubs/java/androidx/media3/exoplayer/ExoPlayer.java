@@ -13,6 +13,7 @@ public interface ExoPlayer extends Player {
     public Builder setSeekBackIncrementMs(long seekBackIncrementMs) { return this; }
     public Builder setSeekForwardIncrementMs(long seekForwardIncrementMs) { return this; }
     public Builder setLooper(Looper looper) { return this; }
+    public Builder setMediaSourceFactory(androidx.media3.exoplayer.source.MediaSource.Factory mediaSourceFactory) { return this; }
     public ExoPlayer build() { return null; }
   }
   void setHandleAudioBecomingNoisy(boolean handleAudioBecomingNoisy);
