@@ -29,6 +29,29 @@ class Lyrics(val lines: List<TimedLine>, val synced: Boolean) {
         return if (end in 0..ms) -1 else found
     }
 
+    /** Subtitle cues (`.srt`, `.vtt`, a video's own track) end on their own; LRC lines last until the next. */
+    val isSubtitles: Boolean get() = synced && lines.isNotEmpty() && lines.all { it.endMs >= 0 }
+
+    /** The first time after [ms] at which [indexAt] can change: the next line's start or the current line's end. */
+    fun nextChangeAfter(ms: Long): Long? {
+        if (!synced || lines.isEmpty()) return null
+        var lo = 0
+        var hi = lines.lastIndex
+        var next = lines.size
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (lines[mid].startMs > ms) {
+                next = mid
+                hi = mid - 1
+            } else {
+                lo = mid + 1
+            }
+        }
+        val start = lines.getOrNull(next)?.startMs
+        val end = lines.getOrNull(next - 1)?.endMs?.takeIf { it > ms }
+        return listOfNotNull(start, end).minOrNull()
+    }
+
     companion object {
         /** Enough lines for a long album track or a lecture; more is a broken file. */
         private const val MAX_LINES = 20_000

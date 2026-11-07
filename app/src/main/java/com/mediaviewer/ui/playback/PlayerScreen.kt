@@ -416,7 +416,7 @@ private fun Controls(
             modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { openPane(Pane.CHAPTERS) }.padding(horizontal = 6.dp, vertical = 2.dp),
         )
     }
-    if (now.cc) extras?.lyrics?.let { LyricsPreview(it, now.positionMs, onOpen = { openPane(Pane.LYRICS) }) }
+    if (now.cc) extras?.lyrics?.let { LyricsPreview(it, now, player, onOpen = { openPane(Pane.LYRICS) }) }
     Spacer(Modifier.height(8.dp))
     SeekRow(now, player, Modifier.fillMaxWidth().widthIn(max = 640.dp).height(40.dp), marks = chapters.map { it.startMs }, bubble = true)
     if (!now.music && now.count >= 2) {
@@ -591,22 +591,59 @@ private fun Cover(now: NowPlaying, player: BookPlayer, extras: TrackExtras?, mod
     }
 }
 
-/** Synced lyrics: the line before, the line playing (highlighted), the line after. A tap opens them all. */
+/**
+ * The position for lyrics and subtitles: [NowPlaying.positionMs] is polled only twice a second, so
+ * while playing this wakes at the next line's start or end (scaled by the speed) and reads the
+ * player then, and a line changes with the sound instead of up to half a second (at 2×, a second) late.
+ */
 @Composable
-private fun LyricsPreview(lyrics: Lyrics, positionMs: Long, onOpen: () -> Unit) {
+private fun lyricsPosition(lyrics: Lyrics, now: NowPlaying, player: BookPlayer): Long {
+    val pos by produceState(now.positionMs, lyrics, now.positionMs, now.playing, now.speed) {
+        value = now.positionMs
+        if (!lyrics.synced || !now.playing) return@produceState
+        while (true) {
+            val p = player.positionMs() ?: return@produceState
+            value = p
+            val next = lyrics.nextChangeAfter(p) ?: return@produceState
+            delay(((next - p) / now.speed).toLong() + 5)
+        }
+    }
+    return pos
+}
+
+/**
+ * Synced lyrics or subtitles above the seek bar; a tap opens them all. Subtitles show as captions:
+ * the cue playing and nothing between cues, in a box two lines tall so the controls don't move.
+ * Lyrics (LRC) show the line before, the line playing (highlighted) and the line after.
+ */
+@Composable
+private fun LyricsPreview(lyrics: Lyrics, now: NowPlaying, player: BookPlayer, onOpen: () -> Unit) {
     if (!lyrics.synced) return
+    val positionMs = lyricsPosition(lyrics, now, player)
     val i = lyrics.indexAt(positionMs)
+    val box = Modifier
+        .padding(top = 8.dp)
+        .widthIn(max = 560.dp)
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(8.dp))
+        .clickable(onClickLabel = "Show all lines", onClick = onOpen)
+    if (lyrics.isSubtitles) {
+        Text(
+            lyrics.lines.getOrNull(i)?.text ?: "",
+            minLines = 2,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = box
+                .background(if (i >= 0) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+        return
+    }
     val at = if (i >= 0) i else lyrics.lines.indexOfFirst { it.startMs > positionMs }.let { if (it < 0) lyrics.lines.size else it } - 1
-    Column(
-        Modifier
-            .padding(top = 8.dp)
-            .widthIn(max = 560.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClickLabel = "Show all lines", onClick = onOpen)
-            .padding(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(box.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         for (k in at - 1..at + 1) {
             val line = lyrics.lines.getOrNull(k)?.text ?: ""
             val current = k == i
@@ -712,7 +749,7 @@ private fun ListPane(
                                     when (p) {
                                         Pane.FILES -> "Files"
                                         Pane.CHAPTERS -> "Chapters"
-                                        Pane.LYRICS -> if (extras?.lyrics?.lines?.any { it.endMs >= 0 } == true) "Subtitles" else "Lyrics"
+                                        Pane.LYRICS -> if (extras?.lyrics?.isSubtitles == true) "Subtitles" else "Lyrics"
                                     },
                                 )
                             },
@@ -728,7 +765,7 @@ private fun ListPane(
             when (shown) {
                 Pane.FILES -> FileList(now, player, times, files, onFilesChanged)
                 Pane.CHAPTERS -> ChapterList(now, player, extras?.chapters.orEmpty())
-                Pane.LYRICS -> extras?.lyrics?.let { LyricsList(it, now.positionMs, player) }
+                Pane.LYRICS -> extras?.lyrics?.let { LyricsList(it, now, player) }
             }
         }
     }
@@ -857,8 +894,8 @@ private fun ChapterList(now: NowPlaying, player: BookPlayer, chapters: List<Chap
 
 /** All lines; synced ones follow the playback, and a tap on a line plays from it. */
 @Composable
-private fun LyricsList(lyrics: Lyrics, positionMs: Long, player: BookPlayer) {
-    val current = lyrics.indexAt(positionMs)
+private fun LyricsList(lyrics: Lyrics, now: NowPlaying, player: BookPlayer) {
+    val current = lyrics.indexAt(lyricsPosition(lyrics, now, player))
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (current - 3).coerceAtLeast(0))
     LaunchedEffect(current) {
         if (current >= 0 && !state.isScrollInProgress) state.animateScrollToItem((current - 3).coerceAtLeast(0))
