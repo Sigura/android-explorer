@@ -78,6 +78,23 @@ class PlayerTest {
         assertEquals(60_500L, l.lines[1].startMs)
         assertEquals(0, l.indexAt(2_000))
         assertEquals("gap between cues", -1, l.indexAt(5_000))
+        assertTrue(l.isSubtitles)
+        assertEquals(1_000L, l.nextChangeAfter(0))
+        assertEquals("the cue's end", 4_000L, l.nextChangeAfter(1_000))
+        assertEquals("the next cue in a gap", 60_500L, l.nextChangeAfter(4_000))
+        assertEquals(62_000L, l.nextChangeAfter(61_000))
+        assertNull("after the last cue", l.nextChangeAfter(62_000))
+    }
+
+    @Test fun lrcChangesOnlyAtLineStarts() {
+        val l = Lyrics.parseLrc("[00:01.00]A\n[00:05.00]B")!!
+        assertFalse(l.isSubtitles)
+        assertEquals(1_000L, l.nextChangeAfter(500))
+        assertEquals(5_000L, l.nextChangeAfter(1_000))
+        assertNull(l.nextChangeAfter(5_000))
+        val paused = Lyrics.parseLrc("[00:01.00]A\n[00:03.00]\n[00:05.00]B")!!
+        assertFalse("a pause doesn't make LRC subtitles", paused.isSubtitles)
+        assertEquals(3_000L, paused.nextChangeAfter(1_000))
     }
 
     @Test fun vttCuesWithHeaderNotesAndSettings() {

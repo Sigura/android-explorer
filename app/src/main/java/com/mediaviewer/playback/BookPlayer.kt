@@ -212,6 +212,9 @@ class BookPlayer(private val app: MediaViewerApp) {
         if (to != null) c.seekTo(to) else c.seekToNextMediaItem()
     }
 
+    /** The position right now, between the polls of [refresh]; null without a connection. */
+    fun positionMs(): Long? = controller?.currentPosition
+
     /** The seek bar: a position in the file playing. */
     fun seekTo(positionMs: Long) = controller?.seekTo(positionMs)
 
