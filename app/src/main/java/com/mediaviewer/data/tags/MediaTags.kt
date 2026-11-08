@@ -886,7 +886,7 @@ object MediaTags {
             var t = raw.trimEnd('\u0000')
             if (codec == "S_TEXT/ASS" || codec == "S_TEXT/SSA") {
                 t = t.split(',', limit = 9).getOrNull(8) ?: return ""
-                t = t.replace(Regex("\\{[^}]*}"), "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
+                t = t.replace(Regex("\\{[^}]*\\}"), "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
             } else {
                 t = t.replace(Regex("<[^>]*>"), "")
             }
