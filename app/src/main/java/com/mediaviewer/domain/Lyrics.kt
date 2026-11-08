@@ -56,11 +56,11 @@ class Lyrics(val lines: List<TimedLine>, val synced: Boolean) {
         /** Enough lines for a long album track or a lecture; more is a broken file. */
         private const val MAX_LINES = 20_000
 
-        private val LRC_STAMP = Regex("""\[(\d{1,4}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
-        private val LRC_TAG = Regex("""^\[([a-zA-Z#]+):(.*)]\s*$""")
+        private val LRC_STAMP = Regex("""\[(\d{1,4}):(\d{1,2})(?:[.:](\d{1,3}))?\]""")
+        private val LRC_TAG = Regex("""^\[([a-zA-Z#]+):(.*)\]\s*$""")
         private val LRC_WORD_STAMP = Regex("""<\d{1,4}:\d{1,2}(?:[.:]\d{1,3})?>""")
         private val CUE_TIME = Regex("""^\s*((?:\d+:)?\d{1,2}:\d{1,2}[.,]\d{1,3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{1,2}[.,]\d{1,3})""")
-        private val TAG = Regex("""<[^>]*>|\{\\[^}]*}""")
+        private val TAG = Regex("""<[^>]*>|\{\\[^}]*\}""")
 
         /** Text with two or more `[mm:ss.xx]` lines is LRC, also when it came from an unsynced tag. */
         fun looksLikeLrc(text: String): Boolean =
