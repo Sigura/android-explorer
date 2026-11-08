@@ -12,7 +12,7 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.util.zip.CRC32
 import java.util.zip.Deflater
-import javax.imageio.ImageIO
+import java.util.zip.Inflater
 
 /** Animated PNG strips (todo §10.10): scan, standalone frames, key frames and compositing order. */
 class ApngAnimTest {
@@ -70,6 +70,54 @@ class ApngAnimTest {
         return out.toByteArray()
     }
 
+    private class Png(val width: Int, val height: Int, private val rows: ByteArray) {
+        fun rgbaAt(x: Int, y: Int): Int {
+            val i = y * (1 + width * 4) + 1 + x * 4
+            return (0 until 4).fold(0) { acc, k -> (acc shl 8) or (rows[i + k].toInt() and 0xFF) }
+        }
+    }
+
+    /**
+     * Strict reader for the 8-bit RGBA, filter-0 PNGs this test writes: checks the signature, every CRC,
+     * IHDR first and IEND last, and the zlib stream (Adler-32 included), so a bad rebuild fails here.
+     */
+    private fun decodePng(png: ByteArray): Png {
+        val sig = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 0x0D, 0x0A, 0x1A, 0x0A)
+        assertTrue("signature", png.copyOf(8).contentEquals(sig))
+        fun u32(at: Int) = (0 until 4).fold(0L) { acc, k -> (acc shl 8) or (png[at + k].toLong() and 0xFF) }
+        val types = mutableListOf<String>()
+        val idat = ByteArrayOutputStream()
+        var ihdr = ByteArray(0)
+        var pos = 8
+        while (pos < png.size) {
+            val len = u32(pos).toInt()
+            val type = String(png, pos + 4, 4, Charsets.ISO_8859_1)
+            val data = png.copyOfRange(pos + 8, pos + 8 + len)
+            val crc = CRC32().apply { update(png, pos + 4, 4 + len) }.value
+            assertEquals("$type CRC", crc, u32(pos + 8 + len))
+            types += type
+            when (type) {
+                "IHDR" -> ihdr = data
+                "IDAT" -> idat.write(data)
+            }
+            pos += 12 + len
+        }
+        assertEquals("chunks fill the file", png.size, pos)
+        assertEquals("IHDR", types.first())
+        assertEquals("IEND", types.last())
+        assertEquals("8-bit RGBA, no interlace", listOf(8, 6, 0, 0, 0), ihdr.copyOfRange(8, 13).map { it.toInt() })
+        val w = u32(16).toInt()
+        val h = u32(20).toInt()
+        val rows = ByteArray(h * (1 + w * 4))
+        val inf = Inflater().apply { setInput(idat.toByteArray()) }
+        val n = inf.inflate(rows)
+        assertTrue("zlib stream complete", inf.finished())
+        inf.end()
+        assertEquals("pixel data size", rows.size, n)
+        repeat(h) { y -> assertEquals("row $y filter", 0, rows[y * (1 + w * 4)].toInt()) }
+        return Png(w, h, rows)
+    }
+
     private val red = 0xFF0000FF.toInt()
     private val green = 0x00FF00FF
     private val blue = 0x0000FFFF
@@ -99,13 +147,10 @@ class ApngAnimTest {
         val info = ApngAnim.scan(src)!!
         val expect = listOf(Triple(8, 6, red), Triple(4, 3, green), Triple(8, 6, blue))
         info.frames.forEachIndexed { i, f ->
-            // ImageIO checks every CRC and the zlib stream: a bad rebuild fails here.
-            val img = ImageIO.read(ApngAnim.standalone(src, info, f).inputStream())!!
+            val img = decodePng(ApngAnim.standalone(src, info, f))
             val (w, h, rgba) = expect[i]
             assertEquals("frame $i size", w to h, img.width to img.height)
-            val argb = img.getRGB(w / 2, h / 2)
-            val wanted = ((rgba and 0xFF) shl 24) or (rgba ushr 8)
-            assertEquals("frame $i colour", wanted, argb)
+            assertEquals("frame $i colour", rgba, img.rgbaAt(w / 2, h / 2))
         }
     }
 
