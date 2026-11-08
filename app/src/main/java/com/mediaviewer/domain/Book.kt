@@ -54,6 +54,30 @@ object Book {
         return listed.toList() + byName.filter { it !in listed }
     }
 
+    /**
+     * A folder holding the book twice, as chapter files and as one `.m4b` named like the folder or
+     * its playlist (text-to-speech tools write both): the `.m4b` is left out, so the book doesn't
+     * play again after the last chapter. Kept when the playlist lists it.
+     */
+    fun withoutWholeBookCopy(playable: List<FileEntry>, folderName: String, playlistName: String?, playlist: List<String>?): List<FileEntry> {
+        val names = listOfNotNull(folderName, playlistName?.substringBeforeLast('.')).map { it.lowercase() }
+        val copies = playable.filter { e ->
+            e.name.endsWith(".m4b", ignoreCase = true) && e.name.substringBeforeLast('.').lowercase() in names && playlist?.contains(e.path) != true
+        }.toSet()
+        if (copies.isEmpty() || playable.none { isAudio(it) && it !in copies }) return playable
+        return playable.filter { it !in copies }
+    }
+
+    /**
+     * A place in a whole-book `.m4b` left out by [withoutWholeBookCopy], as the same place in its
+     * chapter files: the file's index and the position in it. Null unless there is one file per chapter.
+     */
+    fun chapterFilePosition(chapterStarts: List<Long>, fileCount: Int, positionMs: Long): Pair<Int, Long>? {
+        if (chapterStarts.size < 2 || chapterStarts.size != fileCount) return null
+        val i = chapterStarts.indexOfLast { it <= positionMs }.coerceAtLeast(0)
+        return i to (positionMs - chapterStarts[i]).coerceAtLeast(0)
+    }
+
     /** The playlist to follow: the one named like the folder, otherwise the first by name. */
     fun choosePlaylist(names: List<String>, folderName: String): String? {
         val lists = names.filter { n -> n.substringAfterLast('.', "").lowercase().let { it == "m3u" || it == "m3u8" } }

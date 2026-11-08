@@ -159,6 +159,24 @@ class Lyrics(val lines: List<TimedLine>, val synced: Boolean) {
             return Lyrics(out, synced = true)
         }
 
+        /**
+         * Per-chapter texts as one timeline: [parts] pairs each chapter's start with its text, timed
+         * from the chapter's start. A cue running past the next chapter's start is cut there.
+         */
+        fun joined(parts: List<Pair<Long, Lyrics?>>): Lyrics? {
+            val out = ArrayList<TimedLine>()
+            parts.forEachIndexed { i, (start, l) ->
+                if (l == null || !l.synced) return@forEachIndexed
+                val next = parts.getOrNull(i + 1)?.first ?: Long.MAX_VALUE
+                for (line in l.lines) {
+                    val s = start + line.startMs
+                    if (s >= next) break
+                    out.add(TimedLine(s, if (line.endMs < 0) -1 else minOf(start + line.endMs, next), line.text))
+                }
+            }
+            return if (out.isEmpty()) null else Lyrics(out, synced = true)
+        }
+
         /** `hh:mm:ss,mmm`, `mm:ss.mmm`. */
         private fun cueTime(s: String): Long? {
             val parts = s.replace(',', '.').split(':')
@@ -203,6 +221,20 @@ object Companions {
         val wanted = listOf(language.lowercase(), "en").filter { it.isNotEmpty() }
         for (w in wanted) variants.firstOrNull { lang(it) == w || lang(it).startsWith("$w-") }?.let { return it }
         return variants.minWithOrNull(NaturalOrder)
+    }
+
+    /**
+     * One `.lrc` / `.srt` / `.vtt` per chapter of [fileName] (an `.m4b` beside its chapters' texts,
+     * `01 - Chapter 1.srt` …): the folder's text files other than [fileName]'s own, in natural
+     * order, when there are exactly [chapterCount] of them. Null otherwise.
+     */
+    fun perChapter(fileName: String, names: Collection<String>, chapterCount: Int): List<String>? {
+        if (chapterCount < 2) return null
+        val own = fileName.substringBeforeLast('.').lowercase()
+        val texts = names.filter { n ->
+            n.substringAfterLast('.', "").lowercase() in LYRIC_EXTENSIONS && !n.lowercase().startsWith("$own.")
+        }
+        return if (texts.size == chapterCount) texts.sortedWith(NaturalOrder) else null
     }
 
     private val COVER_NAMES = listOf("cover", "folder", "front", "albumart", "album")
