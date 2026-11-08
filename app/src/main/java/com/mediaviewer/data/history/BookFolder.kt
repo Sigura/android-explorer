@@ -2,9 +2,11 @@ package com.mediaviewer.data.history
 
 import com.mediaviewer.data.fs.FolderScanner
 import com.mediaviewer.data.mtp.MtpPaths
+import com.mediaviewer.data.tags.MediaTags
 import com.mediaviewer.data.thumbs.TextDecode
 import com.mediaviewer.domain.Book
 import com.mediaviewer.domain.BookMatch
+import com.mediaviewer.domain.Chapters
 import com.mediaviewer.domain.Playlist
 import com.mediaviewer.domain.ShuffleOrder
 import com.mediaviewer.domain.model.FileEntry
@@ -52,7 +54,7 @@ object BookFolder {
         val playable = files.mapNotNull { FolderScanner.entryFor(it, showHidden = false) }.filter(Book::isPlayable)
         val listName = Book.choosePlaylist(files.map { it.name }, File(folder).name)
         val playlist = listName?.let { readPlaylist(File(folder, it), legacyCharset) }?.let { Playlist.parse(it, folder) }
-        return Book.order(playable, playlist)
+        return Book.order(Book.withoutWholeBookCopy(playable, File(folder).name, listName, playlist), playlist)
     }
 
     /** The same for a device folder (todo §11.4): its listing, and a playlist read from a copy. */
@@ -65,7 +67,7 @@ object BookFolder {
         val playlist = listName?.let { n -> files.firstOrNull { it.name == n } }?.takeIf { it.size <= MAX_PLAYLIST_BYTES }
             ?.let(d::copyOf)?.let { readPlaylist(it, legacyCharset) }
             ?.let { text -> Playlist.parse(text, "/" + folder.removePrefix(MtpPaths.SCHEME)).map { MtpPaths.SCHEME + it.removePrefix("/") } }
-        return Book.order(playable, playlist)
+        return Book.order(Book.withoutWholeBookCopy(playable, folder.substringAfterLast('/'), listName, playlist), playlist)
     }
 
     private fun readPlaylist(file: File, legacyCharset: Charset): String? = try {
@@ -137,10 +139,25 @@ object BookFolder {
             if (h?.finished == true) history.reset(folder)
             return ResumePoint(folder, queue, 0, 0, h?.speed ?: 1f, music, repeatOf(h))
         }
-        val index = queue.indexOfFirst { it.path == h.currentPath }
-        if (index < 0) return ResumePoint(folder, queue, 0, 0, h.speed, music, repeatOf(h))
         val back = if (music) 0 else Book.rewindMs(System.currentTimeMillis() - h.playedAt)
+        val index = queue.indexOfFirst { it.path == h.currentPath }
+        if (index < 0) {
+            val (i, pos) = (if (music) null else fromWholeBook(folder, queue, h.currentPath, h.positionMs)) ?: return ResumePoint(folder, queue, 0, 0, h.speed, music, repeatOf(h))
+            return ResumePoint(folder, queue, i, (pos - back).coerceAtLeast(0), h.speed, music, repeatOf(h))
+        }
         return ResumePoint(folder, queue, index, (h.positionMs - back).coerceAtLeast(0), h.speed, music, repeatOf(h))
+    }
+
+    /**
+     * A book last heard in its whole-book `.m4b`, now left out of the queue for its chapter files
+     * ([Book.withoutWholeBookCopy]): the same place in the chapter file of that chapter.
+     */
+    private fun fromWholeBook(folder: String, queue: List<FileEntry>, path: String?, positionMs: Long): Pair<Int, Long>? {
+        if (path == null || MtpPaths.isMtp(path) || !path.endsWith(".m4b", ignoreCase = true) || parentOf(path) != folder) return null
+        val file = File(path)
+        if (!file.isFile) return null
+        val starts = Chapters.normalize(MediaTags.chapters(file)).map { it.startMs }
+        return Book.chapterFilePosition(starts, queue.size, positionMs)
     }
 
     /**

@@ -152,6 +152,21 @@ class PlayerTest {
         assertEquals("exact name wins", "a.srt", Companions.textFor("a.mkv", listOf("a.en.vtt", "a.srt")))
     }
 
+    @Test fun subtitlesPerChapter() {
+        val names = listOf("10 - Ch 10.srt", "02 - Ch 2.srt", "Book.m4b", "Book.m3u", "01 - Ch 1.srt", "01 - Ch 1.mp3")
+        assertEquals(listOf("01 - Ch 1.srt", "02 - Ch 2.srt", "10 - Ch 10.srt"), Companions.perChapter("Book.m4b", names, 3))
+        assertNull("count differs", Companions.perChapter("Book.m4b", names, 4))
+        assertNull("the file's own text isn't a chapter's", Companions.perChapter("Book.m4b", names + "Book.srt", 4))
+        assertNull("no chapters", Companions.perChapter("Book.m4b", names, 0))
+
+        val ch1 = Lyrics(listOf(TimedLine(0, 2_000, "a"), TimedLine(9_000, 12_000, "b"), TimedLine(20_000, 21_000, "after the chapter")), synced = true)
+        val ch2 = Lyrics(listOf(TimedLine(500, 1_000, "c")), synced = true)
+        val l = Lyrics.joined(listOf(0L to ch1, 10_000L to null, 10_000L to ch2))!!
+        assertEquals(listOf(TimedLine(0, 2_000, "a"), TimedLine(9_000, 10_000, "b"), TimedLine(10_500, 11_000, "c")), l.lines)
+        assertTrue(l.isSubtitles)
+        assertNull(Lyrics.joined(listOf(0L to null)))
+    }
+
     @Test fun coverImages() {
         assertEquals("Folder.JPG", Companions.coverFor(listOf("scan1.jpg", "Folder.JPG", "back.jpg")))
         assertEquals("cover.png", Companions.coverFor(listOf("front.jpg", "cover.png")))

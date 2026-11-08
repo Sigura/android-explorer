@@ -53,6 +53,24 @@ class BookTest {
         assertNull(Book.choosePlaylist(listOf("x.mp3"), "b"))
     }
 
+    @Test fun wholeBookM4bBesideItsChaptersIsLeftOut() {
+        val files = listOf(audio("01 - Ch 1.mp3"), audio("02 - Ch 2.mp3"), audio("Author. Title.m4b"))
+        assertEquals(listOf("01 - Ch 1.mp3", "02 - Ch 2.mp3"), Book.withoutWholeBookCopy(files, "Author. Title", null, null).map { it.name })
+        assertEquals("named like the playlist", 2, Book.withoutWholeBookCopy(files, "b", "Author. Title.m3u", listOf("/b/01 - Ch 1.mp3")).size)
+        assertEquals("listed in the playlist", 3, Book.withoutWholeBookCopy(files, "Author. Title", null, listOf("/b/Author. Title.m4b")).size)
+        assertEquals("another name: a volume of its own", 3, Book.withoutWholeBookCopy(files, "Other", null, null).size)
+        val alone = listOf(audio("Author. Title.m4b"), text("01 - Ch 1.srt"))
+        assertEquals("the only audio file", alone, Book.withoutWholeBookCopy(alone, "Author. Title", null, null))
+    }
+
+    @Test fun wholeBookPositionMovesToTheChapterFile() {
+        val starts = listOf(0L, 60_000L, 150_000L)
+        assertEquals(1 to 30_000L, Book.chapterFilePosition(starts, 3, 90_000))
+        assertEquals(2 to 0L, Book.chapterFilePosition(starts, 3, 150_000))
+        assertEquals(0 to 0L, Book.chapterFilePosition(starts, 3, 0))
+        assertNull("one file per chapter only", Book.chapterFilePosition(starts, 4, 90_000))
+    }
+
     @Test fun rewindAndFinished() {
         assertEquals(0L, Book.rewindMs(30_000))
         assertEquals(5_000L, Book.rewindMs(10 * 60_000))

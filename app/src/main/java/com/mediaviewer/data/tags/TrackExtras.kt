@@ -47,7 +47,7 @@ object TrackExtrasLoader {
         val file = File(path)
         val names = abandonable(READ_MS) { file.parentFile?.list()?.filterNot(FolderScanner::isHidden) } ?: emptyList()
         val chapters = abandonable(READ_MS) { chaptersOf(file, names, durationMs, legacyCharset) } ?: emptyList()
-        val lyrics = abandonable(READ_MS) { lyricsOf(file, names, legacyCharset) }
+        val lyrics = abandonable(READ_MS) { lyricsOf(file, names, chapters, legacyCharset) }
         val tags = abandonable(READ_MS) { retrieverTags(file, COVER_PX, frame = false) }
         val cover = coverOf(file, names, COVER_PX, tags)
         val title = tags?.title?.trim()?.takeIf { it.isNotEmpty() && it != file.nameWithoutExtension && it != file.name }
@@ -91,19 +91,21 @@ object TrackExtrasLoader {
         return emptyList()
     }
 
-    private fun lyricsOf(file: File, names: List<String>, legacyCharset: Charset): Lyrics? {
-        Companions.textFor(file.name, names, Locale.getDefault().language)?.let { name ->
-            val text = readText(File(file.parentFile, name), legacyCharset)
-            if (text != null) {
-                val l = if (name.endsWith(".lrc", ignoreCase = true)) Lyrics.parseLrc(text) ?: Lyrics.plain(text) else Lyrics.parseSubtitles(text)
-                if (l != null) return l
-            }
+    private fun lyricsOf(file: File, names: List<String>, chapters: List<Chapter>, legacyCharset: Charset): Lyrics? {
+        Companions.textFor(file.name, names, Locale.getDefault().language)?.let { name -> companion(file, name, legacyCharset)?.let { return it } }
+        Companions.perChapter(file.name, names, chapters.size)?.let { parts ->
+            Lyrics.joined(chapters.zip(parts) { c, name -> c.startMs to companion(file, name, legacyCharset) })?.let { return it }
         }
         MediaTags.lyrics(file)?.let(Lyrics::fromText)?.let { return it }
         // A lecture's own subtitle track (MKV / MP4, todo §4.6).
         if (!isVideo(file)) return null
         val lines = MediaTags.subtitles(file, Locale.getDefault().language)
         return if (lines.isEmpty()) null else Lyrics(lines, synced = true)
+    }
+
+    private fun companion(file: File, name: String, legacyCharset: Charset): Lyrics? {
+        val text = readText(File(file.parentFile, name), legacyCharset) ?: return null
+        return if (name.endsWith(".lrc", ignoreCase = true)) Lyrics.parseLrc(text) ?: Lyrics.plain(text) else Lyrics.parseSubtitles(text)
     }
 
     private fun readText(f: File, legacyCharset: Charset): String? = try {
