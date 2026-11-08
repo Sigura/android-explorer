@@ -53,6 +53,20 @@ class Lyrics(val lines: List<TimedLine>, val synced: Boolean) {
     }
 
     companion object {
+        private const val TICKER_HOLD = 0.1f
+
+        /**
+         * How far a cue too long for the caption box has scrolled at [ms]: 0 shows its start,
+         * 1 its end. It moves evenly through the cue's time, with a short hold at both ends
+         * so the first and last words can be read.
+         */
+        fun tickerAt(line: TimedLine, ms: Long): Float {
+            val span = line.endMs - line.startMs
+            if (span <= 0) return 0f
+            val t = (ms - line.startMs).toFloat() / span
+            return ((t - TICKER_HOLD) / (1 - 2 * TICKER_HOLD)).coerceIn(0f, 1f)
+        }
+
         /** Enough lines for a long album track or a lecture; more is a broken file. */
         private const val MAX_LINES = 20_000
 

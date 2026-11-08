@@ -29,12 +29,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -95,11 +97,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -117,14 +121,20 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
@@ -137,6 +147,7 @@ import com.mediaviewer.domain.Chapters
 import com.mediaviewer.domain.Lyrics
 import com.mediaviewer.domain.PlayerSpeed
 import com.mediaviewer.domain.SleepTimer
+import com.mediaviewer.domain.TimedLine
 import com.mediaviewer.domain.model.FileEntry
 import com.mediaviewer.domain.model.MediaType
 import com.mediaviewer.domain.model.OtherKind
@@ -232,11 +243,8 @@ fun PlayerScreen(vm: AppViewModel) {
                     })
                     if (wide) {
                         Row(Modifier.fillMaxSize()) {
-                            Column(
-                                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Controls(now, player, times, extras, coverMax, coverFocus, openPane, { speedDialog = true }, { sleepDialog = true })
+                            FittedControls(coverMax, Modifier.weight(1f).fillMaxHeight()) { cover ->
+                                Controls(now, player, times, extras, cover, coverFocus, openPane, { speedDialog = true }, { sleepDialog = true })
                             }
                             Column(Modifier.weight(1f).fillMaxHeight().padding(end = 8.dp)) {
                                 ListPane(now, player, times, extras, files, { filesVersion++ }, pane, { pane = it }, header = null)
@@ -245,11 +253,8 @@ fun PlayerScreen(vm: AppViewModel) {
                     } else {
                         if (!listExpanded) {
                             // The controls take what they need (scrolling on short screens); the list the rest, at least a quarter.
-                            Column(
-                                Modifier.weight(3f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Controls(now, player, times, extras, coverMax, coverFocus, openPane, { speedDialog = true }, { sleepDialog = true })
+                            FittedControls(coverMax, Modifier.weight(3f, fill = false).fillMaxWidth()) { cover ->
+                                Controls(now, player, times, extras, cover, coverFocus, openPane, { speedDialog = true }, { sleepDialog = true })
                             }
                         } else {
                             CollapsedControls(now, player)
@@ -370,6 +375,32 @@ private fun FileInfoDialog(path: String, onDismiss: () -> Unit) {
     )
 }
 
+private val MIN_COVER = 96.dp
+
+/**
+ * The controls with the cover made smaller (down to [MIN_COVER]) so the rest fits without
+ * scrolling: the lyrics or subtitles box takes room. The rest's height doesn't depend on the
+ * cover, so it is measured once and the cover gets what is left of the space.
+ */
+@Composable
+private fun FittedControls(coverMax: Dp, modifier: Modifier, content: @Composable (Dp) -> Unit) {
+    BoxWithConstraints(modifier) {
+        val density = LocalDensity.current
+        var rest by remember { mutableStateOf<Dp?>(null) }
+        val cover = rest?.let { (maxHeight - it).coerceIn(MIN_COVER, coverMax) } ?: coverMax
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .onSizeChanged { rest = with(density) { it.height.toDp() } - cover }
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            content(cover)
+        }
+    }
+}
+
 /** Cover, names, lyrics, seek bar, book bar and buttons: the upper half, or the left pane. */
 @Composable
 private fun Controls(
@@ -377,7 +408,7 @@ private fun Controls(
     player: BookPlayer,
     times: BookTimes?,
     extras: TrackExtras?,
-    coverMax: androidx.compose.ui.unit.Dp,
+    coverMax: Dp,
     coverFocus: FocusRequester,
     openPane: (Pane) -> Unit,
     onSpeed: () -> Unit,
@@ -612,6 +643,60 @@ private fun lyricsPosition(lyrics: Lyrics, now: NowPlaying, player: BookPlayer):
 }
 
 /**
+ * A subtitle cue in a box two lines tall. A cue that needs more than two lines is shown on one
+ * line moving like a news ticker, from its start to its end while the cue plays
+ * ([Lyrics.tickerAt]); it follows the player, so it stops on pause and jumps on a seek.
+ */
+@Composable
+private fun Caption(cue: TimedLine?, now: NowPlaying, player: BookPlayer, modifier: Modifier) {
+    val style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+    val text = cue?.text.orEmpty()
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val measurer = rememberTextMeasurer()
+        val width = constraints.maxWidth
+        val fits = remember(text, width, style) {
+            measurer.measure(text, style, constraints = Constraints(maxWidth = width)).lineCount <= 2
+        }
+        // Holds the box at two lines whatever is shown.
+        Text("", minLines = 2, maxLines = 2, style = style)
+        if (cue == null || fits) {
+            Text(text, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = style)
+        } else {
+            val line = text.replace('\n', ' ')
+            val lineWidth = remember(line, style) { measurer.measure(line, style, maxLines = 1, softWrap = false).size.width }
+            val progress = tickerProgress(cue, now, player)
+            Box(Modifier.fillMaxWidth().clipToBounds()) {
+                Text(
+                    line,
+                    maxLines = 1,
+                    softWrap = false,
+                    style = style,
+                    modifier = Modifier
+                        .wrapContentWidth(Alignment.Start, unbounded = true)
+                        .offset { IntOffset(-((lineWidth - width).coerceAtLeast(0) * progress).toInt(), 0) },
+                )
+            }
+        }
+    }
+}
+
+/** [Lyrics.tickerAt] for [cue], read every frame while playing: the player's position moved on by the time since. */
+@Composable
+private fun tickerProgress(cue: TimedLine, now: NowPlaying, player: BookPlayer): Float {
+    val progress by produceState(Lyrics.tickerAt(cue, now.positionMs), cue, now.positionMs, now.playing, now.speed) {
+        val base = player.positionMs() ?: now.positionMs
+        value = Lyrics.tickerAt(cue, base)
+        if (!now.playing) return@produceState
+        val t0 = withFrameMillis { it }
+        while (true) {
+            val t = withFrameMillis { it }
+            value = Lyrics.tickerAt(cue, base + ((t - t0) * now.speed).toLong())
+        }
+    }
+    return progress
+}
+
+/**
  * Synced lyrics or subtitles above the seek bar; a tap opens them all. Subtitles show as captions:
  * the cue playing and nothing between cues, in a box two lines tall so the controls don't move.
  * Lyrics (LRC) show the line before, the line playing (highlighted) and the line after.
@@ -628,15 +713,11 @@ private fun LyricsPreview(lyrics: Lyrics, now: NowPlaying, player: BookPlayer, o
         .clip(RoundedCornerShape(8.dp))
         .clickable(onClickLabel = "Show all lines", onClick = onOpen)
     if (lyrics.isSubtitles) {
-        Text(
-            lyrics.lines.getOrNull(i)?.text ?: "",
-            minLines = 2,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = box
+        Caption(
+            lyrics.lines.getOrNull(i),
+            now,
+            player,
+            box
                 .background(if (i >= 0) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         )

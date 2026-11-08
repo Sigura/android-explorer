@@ -12,6 +12,16 @@ import org.junit.Test
 
 /** Player screen rules (todo §4): lyrics, subtitles, chapters, cue sheets, shuffle, speed, sleep timer. */
 class PlayerTest {
+    @Test fun `a long cue scrolls evenly through its time, holding at both ends`() {
+        val cue = TimedLine(10_000, 20_000, "long")
+        assertEquals(0f, Lyrics.tickerAt(cue, 9_000), 0f)
+        assertEquals(0f, Lyrics.tickerAt(cue, 11_000), 0f)
+        assertEquals(0.5f, Lyrics.tickerAt(cue, 15_000), 1e-6f)
+        assertEquals(1f, Lyrics.tickerAt(cue, 19_500), 0f)
+        assertEquals(1f, Lyrics.tickerAt(cue, 25_000), 0f)
+        assertEquals(0f, Lyrics.tickerAt(TimedLine(5_000, 5_000, "x"), 5_000), 0f)
+    }
+
     // ------------------------------------------------------------------ LRC
 
     @Test fun lrcLinesAreTimedAndSorted() {
