@@ -36,7 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -104,10 +104,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -643,9 +648,9 @@ private fun lyricsPosition(lyrics: Lyrics, now: NowPlaying, player: BookPlayer):
 }
 
 /**
- * A subtitle cue in a box two lines tall. A cue that needs more than two lines is shown on one
- * line moving like a news ticker, from its start to its end while the cue plays
- * ([Lyrics.tickerAt]); it follows the player, so it stops on pause and jumps on a seek.
+ * A subtitle cue in a box two lines tall. A cue that needs more lines crawls up through the box,
+ * from its first lines to its last while the cue plays ([Lyrics.tickerAt]), the edge where more
+ * text is hidden faded; it follows the player, so it stops on pause and jumps on a seek.
  */
 @Composable
 private fun Caption(cue: TimedLine?, now: NowPlaying, player: BookPlayer, modifier: Modifier) {
@@ -662,18 +667,32 @@ private fun Caption(cue: TimedLine?, now: NowPlaying, player: BookPlayer, modifi
         if (cue == null || fits) {
             Text(text, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = style)
         } else {
-            val line = text.replace('\n', ' ')
-            val lineWidth = remember(line, style) { measurer.measure(line, style, maxLines = 1, softWrap = false).size.width }
+            val boxHeight = remember(style) { measurer.measure("1\n2", style).size.height }
+            val textHeight = remember(text, width, style) { measurer.measure(text, style, constraints = Constraints(maxWidth = width)).size.height }
             val progress = tickerProgress(cue, now, player)
-            Box(Modifier.fillMaxWidth().clipToBounds()) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clipToBounds()
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        val top = if (progress > 0f) Color.Transparent else Color.Black
+                        val bottom = if (progress < 1f) Color.Transparent else Color.Black
+                        drawRect(
+                            Brush.verticalGradient(0f to top, 0.25f to Color.Black, 0.75f to Color.Black, 1f to bottom),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    },
+            ) {
                 Text(
-                    line,
-                    maxLines = 1,
-                    softWrap = false,
+                    text,
+                    textAlign = TextAlign.Center,
                     style = style,
                     modifier = Modifier
-                        .wrapContentWidth(Alignment.Start, unbounded = true)
-                        .offset { IntOffset(-((lineWidth - width).coerceAtLeast(0) * progress).toInt(), 0) },
+                        .fillMaxWidth()
+                        .wrapContentHeight(Alignment.Top, unbounded = true)
+                        .offset { IntOffset(0, -((textHeight - boxHeight).coerceAtLeast(0) * progress).toInt()) },
                 )
             }
         }
