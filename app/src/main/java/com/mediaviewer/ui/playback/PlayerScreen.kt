@@ -194,7 +194,13 @@ fun PlayerScreen(vm: AppViewModel) {
     }
     val times by player.times.collectAsState()
     val extrasNow by player.extras.collectAsState()
-    val extras = extrasNow?.takeIf { it.path == now.path }
+    // Lyrics timed for the whole book are moved into this file once the files' durations are read.
+    val extras = remember(extrasNow, now.path, now.index, now.durationMs, now.music, times) {
+        extrasNow?.takeIf { it.path == now.path }?.let { e ->
+            val start = if (now.music) null else times?.takeIf { it.paths.getOrNull(now.index) == now.path }?.startOf(now.index)
+            e.lyrics?.let { e.copy(lyrics = it.inFile(start, now.durationMs)) } ?: e
+        }
+    }
     var filesVersion by remember { mutableIntStateOf(0) }
     val files by produceState(emptyMap<String, FileHistory>(), now.folder, now.index, now.playing, filesVersion) {
         value = player.fileHistory(now.folder)

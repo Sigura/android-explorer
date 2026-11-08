@@ -52,8 +52,36 @@ class Lyrics(val lines: List<TimedLine>, val synced: Boolean) {
         return listOfNotNull(start, end).minOrNull()
     }
 
+    /**
+     * This text for one file of a book, [durationMs] long and starting [startMs] into the book.
+     * A text timed for the whole book (one `.srt` for all the files, or each file's own counted
+     * from the book's start) runs well past the file's end: its lines are moved back by [startMs]
+     * and cut to the file, a cue playing across the file's start kept from 0. A text that fits
+     * the file is returned as is. Null when the text is in book time but [startMs] isn't known yet,
+     * or nothing of it falls in this file.
+     */
+    fun inFile(startMs: Long?, durationMs: Long): Lyrics? {
+        if (!synced || lines.isEmpty() || durationMs <= 0) return this
+        val last = lines.maxOf { maxOf(it.startMs, it.endMs) }
+        if (last <= durationMs + maxOf(BOOK_TIME_SLACK_MS, durationMs / 10)) return this
+        if (startMs == null) return null
+        val end = startMs + durationMs
+        val out = lines.mapNotNull { l ->
+            val crossesStart = l.startMs < startMs && l.endMs > startMs
+            if (l.startMs >= end || (l.startMs < startMs && !crossesStart)) return@mapNotNull null
+            TimedLine(
+                (l.startMs - startMs).coerceAtLeast(0),
+                if (l.endMs < 0) -1 else minOf(l.endMs, end) - startMs,
+                l.text,
+            )
+        }
+        return if (out.isEmpty()) null else Lyrics(out, synced = true)
+    }
+
     companion object {
         private const val TICKER_HOLD = 0.1f
+        /** A file's own text can end a little after the length the player reports (VBR estimates). */
+        private const val BOOK_TIME_SLACK_MS = 5_000L
 
         /**
          * How far a cue too long for the caption box has scrolled at [ms]: 0 shows its start,
@@ -250,6 +278,26 @@ object Companions {
         }
         return if (texts.size == chapterCount) texts.sortedWith(NaturalOrder) else null
     }
+
+    /**
+     * A text for the whole book among the folder's [names], for a file without its own: the
+     * `.lrc` / `.srt` / `.vtt` named like the folder ([folderName]) or like a playlist or `.m4b`
+     * there, else the folder's only text when no other file is named like it. Its times may count
+     * from the book's start ([Lyrics.inFile] tells). Null when there is none.
+     */
+    fun bookText(names: Collection<String>, folderName: String): String? {
+        val texts = names.filter { it.substringAfterLast('.', "").lowercase() in LYRIC_EXTENSIONS }
+        if (texts.isEmpty()) return null
+        val bookNames = names
+            .filter { it.substringAfterLast('.', "").lowercase() in BOOK_EXTENSIONS }
+            .map { it.substringBeforeLast('.').lowercase() } + folderName.lowercase()
+        texts.firstOrNull { it.substringBeforeLast('.').lowercase() in bookNames }?.let { return it }
+        val only = texts.singleOrNull() ?: return null
+        val base = only.substringBeforeLast('.').lowercase()
+        return only.takeIf { names.none { n -> n != only && n.substringBeforeLast('.').lowercase() == base } }
+    }
+
+    private val BOOK_EXTENSIONS = setOf("m3u", "m3u8", "m4b")
 
     private val COVER_NAMES = listOf("cover", "folder", "front", "albumart", "album")
     private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")

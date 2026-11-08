@@ -96,6 +96,8 @@ object TrackExtrasLoader {
         Companions.perChapter(file.name, names, chapters.size)?.let { parts ->
             Lyrics.joined(chapters.zip(parts) { c, name -> c.startMs to companion(file, name, legacyCharset) })?.let { return it }
         }
+        // Possibly in book time; the player screen places it in this file (Lyrics.inFile).
+        Companions.bookText(names, file.parentFile?.name.orEmpty())?.let { name -> companion(file, name, legacyCharset)?.let { return it } }
         MediaTags.lyrics(file)?.let(Lyrics::fromText)?.let { return it }
         // A lecture's own subtitle track (MKV / MP4, todo §4.6).
         if (!isVideo(file)) return null

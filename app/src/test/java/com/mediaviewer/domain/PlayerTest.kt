@@ -22,6 +22,51 @@ class PlayerTest {
         assertEquals(0f, Lyrics.tickerAt(TimedLine(5_000, 5_000, "x"), 5_000), 0f)
     }
 
+    @Test fun `a file starts after the durations before it, unknown while one is missing`() {
+        val t = BookTimes(listOf("a", "b", "c"), listOf(60_000L, 90_000L, null))
+        assertEquals(0L, t.startOf(0))
+        assertEquals(150_000L, t.startOf(2))
+        assertNull(BookTimes(listOf("a", "b"), listOf(null, 5L)).startOf(1))
+        assertNull(t.startOf(3))
+    }
+
+    @Test fun `a file's own subtitles stay as they are`() {
+        val own = Lyrics(listOf(TimedLine(1_500, 4_000, "a"), TimedLine(5_000, 61_000, "b")), synced = true)
+        // a little past the reported length: a VBR estimate, still the file's own time
+        assertEquals(own, own.inFile(null, 60_000))
+        assertEquals(own, own.inFile(600_000, 60_000))
+    }
+
+    @Test fun `subtitles in book time are moved into the file and cut to it`() {
+        val book = Lyrics(
+            listOf(
+                TimedLine(10_000, 50_000, "first file"),
+                TimedLine(58_000, 63_000, "across the join"),
+                TimedLine(70_000, 80_000, "second file"),
+                TimedLine(125_000, 130_000, "third file"),
+            ),
+            synced = true,
+        )
+        val second = book.inFile(60_000, 60_000)!!
+        assertEquals(
+            listOf(TimedLine(0, 3_000, "across the join"), TimedLine(10_000, 20_000, "second file")),
+            second.lines,
+        )
+        assertEquals(listOf("first file", "across the join"), book.inFile(0, 60_000)!!.lines.map { it.text })
+        // book time, but where the file starts isn't known yet: nothing rather than wrong lines
+        assertNull(book.inFile(null, 60_000))
+        assertNull(book.inFile(200_000, 60_000))
+    }
+
+    @Test fun `the book's text is named like the folder, a playlist or the m4b, else the only one`() {
+        assertEquals("Book.srt", Companions.bookText(listOf("01.mp3", "02.mp3", "Book.srt"), "Book"))
+        assertEquals("Story.SRT", Companions.bookText(listOf("01.mp3", "Story.m3u", "Story.SRT", "x.lrc"), "Book"))
+        assertEquals("text.vtt", Companions.bookText(listOf("01.mp3", "02.mp3", "text.vtt"), "Book"))
+        // another file's own lyrics are not the book's
+        assertNull(Companions.bookText(listOf("song1.mp3", "song1.lrc", "song2.mp3"), "Album"))
+        assertNull(Companions.bookText(listOf("01.mp3", "01.srt", "02.mp3", "02.srt"), "Book"))
+    }
+
     // ------------------------------------------------------------------ LRC
 
     @Test fun lrcLinesAreTimedAndSorted() {
