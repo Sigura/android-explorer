@@ -28,6 +28,14 @@ data class BookTimes(val paths: List<String>, val durationsMs: List<Long?>) {
         return BookProgress(elapsed, total.coerceAtLeast(elapsed), exact)
     }
 
+    /** Where file [index] starts in the book: the durations before it; null while one of them is unknown. */
+    fun startOf(index: Int): Long? {
+        if (index !in paths.indices) return null
+        var start = 0L
+        for (i in 0 until index) start += durationsMs[i] ?: return null
+        return start
+    }
+
     /** Relative widths for the segmented book bar; a file not read yet counts as an average one. */
     fun weights(current: Int, currentMs: Long): List<Float> {
         val known = paths.indices.mapNotNull { duration(it, current, currentMs) }
