@@ -1,7 +1,6 @@
 package com.mediaviewer.ui.slideshow
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -18,17 +17,10 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
-import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,7 +53,7 @@ import java.util.Date
 
 /**
  * Slideshow menu (README §6). The timer pauses while it is open and it stays open until closed;
- * a video or GIF keeps playing. Previous / Next and the star leave it open to go through the files.
+ * a video or GIF keeps playing and looping.
  */
 @Composable
 fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier = Modifier) {
@@ -69,7 +61,6 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
     val ctx = LocalContext.current
     val first = remember { FocusRequester() }
     var showInfo by remember { mutableStateOf(false) }
-    var more by remember { mutableStateOf(false) }
     val e = c.current
 
     LaunchedEffect(Unit) {
@@ -106,7 +97,7 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
                 if (c.canFavourite && e != null) {
                     val fav = e.path in settings.favouriteFiles
                     val label = if (fav) "Remove from favourites" else "Add to favourites"
-                    IconButton(onClick = c::toggleFavourite) {
+                    IconButton(onClick = { c.toggleFavourite(); c.closeMenu() }) {
                         Icon(if (fav) Icons.Rounded.Star else Icons.Rounded.StarBorder, contentDescription = label)
                     }
                 }
@@ -132,29 +123,18 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
                 Switch(checked = settings.random, onCheckedChange = { c.setRandom(it) })
             }
 
-            // Five buttons fit the narrowest phone (320 dp); the rest is under ⋮.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                MenuButton(Icons.Rounded.SkipPrevious, "Previous") { c.previous() }
-                MenuAction(c, if (c.paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, if (c.paused) "Play" else "Pause") {
-                    c.paused = !c.paused
-                }
-                MenuButton(Icons.Rounded.SkipNext, "Next") { c.next() }
+                // 3. Delete without confirmation (undo snackbar).
+                MenuAction(c, Icons.Rounded.Delete, "Delete") { c.deleteCurrent() }
+                // 4. Back to folder view.
+                MenuAction(c, Icons.AutoMirrored.Rounded.ArrowBack, "Back to folder") { c.close() }
+                MenuButton(Icons.Rounded.Info, "File info") { showInfo = !showInfo }
+                // Device files aren't on this phone to share (as in the folder view).
+                if (!c.onDevice) MenuAction(c, Icons.Rounded.Share, "Share") { e?.let { shareFiles(ctx, listOf(it)) } }
                 MenuButton(
                     if (settings.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
                     if (settings.muted) "Unmute" else "Mute",
                 ) { vm.settingsStore.update { it.copy(muted = !it.muted) } }
-                Box {
-                    MenuButton(Icons.Rounded.MoreVert, "More") { more = true }
-                    DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                        MoreItem(Icons.Rounded.Info, if (showInfo) "Hide file info" else "File info") { more = false; showInfo = !showInfo }
-                        // Device files aren't on this phone to share (as in the folder view).
-                        if (!c.onDevice) MoreItem(Icons.Rounded.Share, "Share") { more = false; c.closeMenu(); e?.let { shareFiles(ctx, listOf(it)) } }
-                        // 3. Delete without confirmation (undo snackbar).
-                        MoreItem(Icons.Rounded.Delete, "Delete") { more = false; c.deleteCurrent() }
-                        // 4. Back to folder view.
-                        MoreItem(Icons.AutoMirrored.Rounded.ArrowBack, "Back to folder") { more = false; c.closeMenu(); c.close() }
-                    }
-                }
             }
 
             if (showInfo && e != null) {
@@ -174,11 +154,6 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
 }
 
 private const val MAX_NAME = 256
-
-@Composable
-private fun MoreItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    DropdownMenuItem(text = { Text(label) }, leadingIcon = { Icon(icon, contentDescription = null) }, onClick = onClick)
-}
 
 @Composable
 private fun MenuButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
