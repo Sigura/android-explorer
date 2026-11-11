@@ -6,7 +6,6 @@ import android.util.Log
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mediaviewer.data.fs.FileTypes
@@ -67,9 +66,6 @@ class SlideshowController(
         private set
     /** Menu bounds in slideshow coordinates, so taps on the menu don't reach the slide. */
     var menuBounds: androidx.compose.ui.geometry.Rect? = null
-    /** Bumped on any menu input; the menu closes after ~5 s without input. */
-    var menuTouch by mutableLongStateOf(0L)
-        private set
     var timing by mutableStateOf<SlideTiming?>(null)
         private set
     var meta by mutableStateOf<MediaMeta?>(null)
@@ -579,7 +575,6 @@ class SlideshowController(
     fun deleteCurrent() {
         val e = current ?: return
         val o = order ?: return
-        touchMenu()
         o.remove(e.path)
         known.remove(e.path)
         vm.delete(listOf(e)) { restored -> restored.forEach { r -> if (known.add(r.path)) o.add(r) }; updateProgress() }
@@ -590,7 +585,6 @@ class SlideshowController(
 
     fun openMenu() {
         menuOpen = true
-        touchMenu()
     }
 
     fun closeMenu() {
@@ -598,8 +592,12 @@ class SlideshowController(
         menuBounds = null
     }
 
-    fun touchMenu() {
-        menuTouch = SystemClock.uptimeMillis()
+    /** On a device, only a file remembered by its serial number can be a favourite (todo §11.4). */
+    val canFavourite: Boolean
+        get() = current?.let { !onDevice || MtpPaths.isRememberedPath(it.path) } == true
+
+    fun toggleFavourite() {
+        current?.takeIf { canFavourite }?.let { vm.toggleFavouriteFiles(listOf(it.path)) }
     }
 
     /** A video that has a listening position: where the slideshow left it goes back to the book. */

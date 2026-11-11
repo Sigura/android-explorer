@@ -50,7 +50,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.DriveFileMove
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAddCheck
@@ -59,17 +58,14 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreateNewFolder
-import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -834,7 +830,6 @@ private fun SelectionBar(browser: BrowserState, remote: Boolean, favourites: Set
             TipIconButton("Cancel (Esc)", onClick = browser::clearSelection) { Icon(Icons.Rounded.Close, contentDescription = "Cancel") }
             Text("${browser.selection.size} selected", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             TipIconButton("Select all (Ctrl+A)", onClick = browser::selectAll) { Icon(Icons.AutoMirrored.Rounded.PlaylistAddCheck, contentDescription = "Select all") }
-            TipIconButton("Invert selection", onClick = browser::invert) { Icon(Icons.Rounded.SwapHoriz, contentDescription = "Invert selection") }
             val favs = browser.favouriteCandidates(browser.selectedEntries())
             if (favs.isNotEmpty()) {
                 val all = favourites.containsAll(favs)
@@ -843,23 +838,18 @@ private fun SelectionBar(browser: BrowserState, remote: Boolean, favourites: Set
                     Icon(if (all) Icons.Rounded.Star else Icons.Rounded.StarBorder, contentDescription = label)
                 }
             }
-            // Device folders (todo §9): no share, the files aren't on this phone.
-            if (!remote) {
-                TipIconButton("Share", onClick = { browser.share(browser.selectedEntries()) }) {
-                    Icon(Icons.Rounded.Share, contentDescription = "Share")
-                }
-            }
             var menu by remember { mutableStateOf(false) }
             Box {
-                TipIconButton("Move or copy to…", onClick = { menu = true }) {
-                    Icon(Icons.AutoMirrored.Rounded.DriveFileMove, contentDescription = "Move or copy to…")
-                }
+                TipIconButton("More", onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Invert selection") }, onClick = { menu = false; browser.invert() })
+                    // Device folders (todo §9): no share, the files aren't on this phone.
+                    if (!remote) DropdownMenuItem(text = { Text("Share") }, onClick = { menu = false; browser.share(browser.selectedEntries()) })
                     DropdownMenuItem(text = { Text("Move to…") }, onClick = { menu = false; browser.transfer(browser.selectedEntries(), true) })
                     DropdownMenuItem(text = { Text("Copy to…") }, onClick = { menu = false; browser.transfer(browser.selectedEntries(), false) })
+                    DropdownMenuItem(text = { Text("Delete (Del)") }, onClick = { menu = false; browser.delete(browser.selectedEntries()) })
                 }
             }
-            TipIconButton("Delete (Del)", onClick = { browser.delete(browser.selectedEntries()) }) { Icon(Icons.Rounded.Delete, contentDescription = "Delete") }
         }
     }
 }
