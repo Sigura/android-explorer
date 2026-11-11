@@ -475,7 +475,6 @@ private fun ZonesHint(onDone: () -> Unit) {
 private fun handleKey(c: SlideshowController, key: Key, type: KeyEventType, invert: Boolean): Boolean {
     if (type != KeyEventType.KeyDown) return false
     if (c.menuOpen) {
-        c.touchMenu()
         return when (key) {
             Key.Escape, Key.M, Key.Menu -> {
                 c.closeMenu()

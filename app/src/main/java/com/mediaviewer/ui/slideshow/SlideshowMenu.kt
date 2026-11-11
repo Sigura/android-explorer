@@ -1,18 +1,16 @@
 package com.mediaviewer.ui.slideshow
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -20,12 +18,20 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -42,8 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -52,13 +56,12 @@ import com.mediaviewer.ui.AppViewModel
 import com.mediaviewer.ui.common.formatDuration
 import com.mediaviewer.ui.common.formatSize
 import com.mediaviewer.ui.common.shareFiles
-import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
 
 /**
- * Slideshow menu (README §6). The timer pauses while it is open; it closes after ~5 s without input
- * and after any button action except file info.
+ * Slideshow menu (README §6). The timer pauses while it is open and it stays open until closed;
+ * a video or GIF keeps playing. Previous / Next and the star leave it open to go through the files.
  */
 @Composable
 fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier = Modifier) {
@@ -66,14 +69,9 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
     val ctx = LocalContext.current
     val first = remember { FocusRequester() }
     var showInfo by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
     val e = c.current
 
-    LaunchedEffect(c.menuTouch, showInfo) {
-        // Not while the file info is open: it is there to be read.
-        if (showInfo) return@LaunchedEffect
-        delay(5000)
-        c.closeMenu()
-    }
     LaunchedEffect(Unit) {
         try {
             first.requestFocus()
@@ -87,16 +85,7 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
         modifier = modifier
             .widthIn(max = 720.dp)
             .fillMaxWidth()
-            .onGloballyPositioned { c.menuBounds = it.boundsInParent() }
-            .pointerInput(Unit) {
-                // Any touch on the menu counts as input and keeps it open.
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitPointerEvent(PointerEventPass.Initial)
-                        c.touchMenu()
-                    }
-                }
-            },
+            .onGloballyPositioned { c.menuBounds = it.boundsInParent() },
     ) {
         Column(
             Modifier.windowInsetsPadding(WindowInsets.navigationBars).padding(16.dp),
@@ -114,6 +103,13 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
                 if (total > 0) {
                     Text("%,d / %,d".format(pos, total), style = MaterialTheme.typography.labelMedium)
                 }
+                if (c.canFavourite && e != null) {
+                    val fav = e.path in settings.favouriteFiles
+                    val label = if (fav) "Remove from favourites" else "Add to favourites"
+                    IconButton(onClick = c::toggleFavourite) {
+                        Icon(if (fav) Icons.Rounded.Star else Icons.Rounded.StarBorder, contentDescription = label)
+                    }
+                }
             }
 
             // 1. Interval R, 1–40 s, applied at once and saved.
@@ -121,10 +117,7 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
                 Text("Interval", Modifier.width(72.dp))
                 Slider(
                     value = settings.intervalSec.toFloat(),
-                    onValueChange = { v ->
-                        c.touchMenu()
-                        vm.settingsStore.update { it.copy(intervalSec = v.toInt().coerceIn(1, 40)) }
-                    },
+                    onValueChange = { v -> vm.settingsStore.update { it.copy(intervalSec = v.toInt().coerceIn(1, 40)) } },
                     valueRange = 1f..40f,
                     steps = 38,
                     modifier = Modifier.weight(1f).focusRequester(first),
@@ -136,29 +129,32 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Shuffle, contentDescription = null)
                 Text("Random order", Modifier.weight(1f).padding(start = 12.dp))
-                Switch(checked = settings.random, onCheckedChange = { c.touchMenu(); c.setRandom(it) })
+                Switch(checked = settings.random, onCheckedChange = { c.setRandom(it) })
             }
 
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            // Five buttons fit the narrowest phone (320 dp); the rest is under ⋮.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                MenuButton(Icons.Rounded.SkipPrevious, "Previous") { c.previous() }
                 MenuAction(c, if (c.paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, if (c.paused) "Play" else "Pause") {
                     c.paused = !c.paused
                 }
-                MenuAction(
-                    c,
+                MenuButton(Icons.Rounded.SkipNext, "Next") { c.next() }
+                MenuButton(
                     if (settings.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
                     if (settings.muted) "Unmute" else "Mute",
                 ) { vm.settingsStore.update { it.copy(muted = !it.muted) } }
-                MenuButton(Icons.Rounded.Info, "File info") { showInfo = !showInfo }
-                // Device files aren't on this phone to share (as in the folder view).
-                if (!c.onDevice) MenuAction(c, Icons.Rounded.Share, "Share") { e?.let { shareFiles(ctx, listOf(it)) } }
-                // 3. Delete without confirmation (undo snackbar).
-                MenuAction(c, Icons.Rounded.Delete, "Delete") { c.deleteCurrent() }
-                Spacer(Modifier.width(8.dp))
-                // 4. Back to folder view.
-                MenuAction(c, Icons.AutoMirrored.Rounded.ArrowBack, "Back to folder") { c.close() }
+                Box {
+                    MenuButton(Icons.Rounded.MoreVert, "More") { more = true }
+                    DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                        MoreItem(Icons.Rounded.Info, if (showInfo) "Hide file info" else "File info") { more = false; showInfo = !showInfo }
+                        // Device files aren't on this phone to share (as in the folder view).
+                        if (!c.onDevice) MoreItem(Icons.Rounded.Share, "Share") { more = false; c.closeMenu(); e?.let { shareFiles(ctx, listOf(it)) } }
+                        // 3. Delete without confirmation (undo snackbar).
+                        MoreItem(Icons.Rounded.Delete, "Delete") { more = false; c.deleteCurrent() }
+                        // 4. Back to folder view.
+                        MoreItem(Icons.AutoMirrored.Rounded.ArrowBack, "Back to folder") { more = false; c.closeMenu(); c.close() }
+                    }
+                }
             }
 
             if (showInfo && e != null) {
@@ -178,6 +174,11 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
 }
 
 private const val MAX_NAME = 256
+
+@Composable
+private fun MoreItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    DropdownMenuItem(text = { Text(label) }, leadingIcon = { Icon(icon, contentDescription = null) }, onClick = onClick)
+}
 
 @Composable
 private fun MenuButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
