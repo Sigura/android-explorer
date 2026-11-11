@@ -5,8 +5,9 @@ package com.mediaviewer.domain
  *
  * - **Where items were left:** the last [maxVisits] items remember their elapsed time, show time
  *   and video / GIF position, so going back *or forward* to one goes on from that position (its
- *   timer starts over, with the full time); an item left with less than [minLeftMs] to go starts
- *   over instead of flashing by.
+ *   timer starts over, with the full time); a video or GIF left with less than [minLeftMs] of it
+ *   to go starts over instead of flashing by. The timer doesn't decide: an item the timer ran out
+ *   on, or one left near the end of its time, still goes on from its position.
  * - **Waiting for the target:** a manual step keeps the item on screen until its target is ready.
  *   A second press the same way moves the target one step further; the opposite press cancels the
  *   wait; a target that fails to load is skipped (the target moves on the same way).
@@ -14,7 +15,7 @@ package com.mediaviewer.domain
  * Offsets are signed steps from the item on screen in the slideshow order (`+2` = two items ahead).
  */
 class SlideNav(private val maxVisits: Int = 15, private val minLeftMs: Long = 2_000L) {
-    class Visit(val elapsedMs: Long, val showMs: Long, val positionMs: Long)
+    class Visit(val elapsedMs: Long, val positionMs: Long, val durationMs: Long?)
 
     /** A step waiting for its target: [dir] is +1 (next) or -1 (previous), [steps] ≥ 1. */
     data class Wait(val dir: Int, val steps: Int) {
@@ -39,17 +40,19 @@ class SlideNav(private val maxVisits: Int = 15, private val minLeftMs: Long = 2_
     var wait: Wait? = null
         private set
 
-    /** The item [path] is left after [elapsedMs] of its [showMs], at [positionMs] in its video or GIF. */
-    fun leave(path: String, elapsedMs: Long, showMs: Long, positionMs: Long) {
+    /** The item [path] is left after [elapsedMs] on screen, at [positionMs] of its video or GIF ([durationMs] long, if known). */
+    fun leave(path: String, elapsedMs: Long, positionMs: Long, durationMs: Long?) {
         if (elapsedMs <= 0) return
-        visits[path] = Visit(elapsedMs, showMs, positionMs)
+        visits[path] = Visit(elapsedMs, positionMs, durationMs)
     }
 
     /** Where [path] goes on from, if it does, without forgetting it (for preparing it). */
-    fun peekResume(path: String): Visit? = visits[path]?.takeIf { it.showMs - it.elapsedMs >= minLeftMs }
+    fun peekResume(path: String): Visit? = visits[path]?.takeIf(::goesOn)
 
     /** Where [path] goes on from, if it does; it is shown now, so the visit is used up either way. */
-    fun resume(path: String): Visit? = visits.remove(path)?.takeIf { it.showMs - it.elapsedMs >= minLeftMs }
+    fun resume(path: String): Visit? = visits.remove(path)?.takeIf(::goesOn)
+
+    private fun goesOn(v: Visit): Boolean = v.durationMs == null || v.durationMs <= 0 || v.durationMs - v.positionMs >= minLeftMs
 
     /**
      * Next (+1) or previous (-1) pressed. [reachable] says whether an offset has an item (not past

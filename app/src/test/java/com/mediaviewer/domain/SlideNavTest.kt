@@ -17,12 +17,12 @@ class SlideNavTest {
         val reachable: (Int) -> Boolean = { o -> order.peek(o) != null && kotlin.math.abs(o) < order.size }
         val current get() = order.current!!.path
 
-        /** The item on screen is left after [elapsed] ms of 14 s at [position]; the target is shown and resumed. */
-        fun step(dir: Int, elapsed: Long, position: Long = 0): SlideNav.Visit? {
+        /** The item on screen is left after [elapsed] ms at [position] of [duration]; the target is shown and resumed. */
+        fun step(dir: Int, elapsed: Long, position: Long = 0, duration: Long? = null): SlideNav.Visit? {
             val a = nav.press(dir, reachable)
             if (a !is SlideNav.Action.Go) return null
             val target = order.peek(a.offset)!!
-            nav.leave(current, elapsed, 14_000, position)
+            nav.leave(current, elapsed, position, duration)
             order.moveTo(target.path)
             nav.done()
             return nav.resume(target.path)
@@ -52,25 +52,35 @@ class SlideNavTest {
         assertEquals("/d/3.jpg", s.current)
     }
 
-    @Test fun nearlyFinishedItemsStartOver() {
+    @Test fun nearlyFinishedVideosStartOver() {
         val s = Show(3)
-        s.step(+1, 12_500) // 0 left 1.5 s before its end
+        s.step(+1, 12_500, position = 58_500, duration = 60_000) // 0's video left 1.5 s before its end
         assertNull(s.step(-1, 2_000))
         // Exactly 2 s left still goes on.
-        s.step(+1, 12_000)
+        s.step(+1, 12_000, position = 58_000, duration = 60_000)
+        assertNotNull(s.step(-1, 1_000))
+    }
+
+    @Test fun anItemTheTimerRanOutOnGoesOnFromItsPosition() {
+        val s = Show(3)
+        // 0 is a looping video shown for its whole 14 s, 14 s into its 60 s; then back to it.
+        s.step(+1, 14_000, position = 14_000, duration = 60_000)
+        assertEquals(14_000L, s.step(-1, 1_000)!!.positionMs)
+        // An image or a video of unknown length left at the end of its time also goes on.
+        s.step(+1, 14_000)
         assertNotNull(s.step(-1, 1_000))
     }
 
     @Test fun visitsAreUsedOnceAndOnlyTheLastOnesAreKept() {
         val nav = SlideNav(maxVisits = 2, minLeftMs = 2_000)
-        nav.leave("a", 1_000, 14_000, 0)
-        nav.leave("b", 1_000, 14_000, 0)
-        nav.leave("c", 1_000, 14_000, 0)
+        nav.leave("a", 1_000, 0, null)
+        nav.leave("b", 1_000, 0, null)
+        nav.leave("c", 1_000, 0, null)
         assertNull(nav.resume("a")) // dropped: only the last 2
         assertNotNull(nav.peekResume("b"))
         assertNotNull(nav.resume("b"))
         assertNull(nav.resume("b"))
-        nav.leave("d", 0, 14_000, 0) // never on screen: not remembered
+        nav.leave("d", 0, 0, null) // never on screen: not remembered
         assertNull(nav.resume("d"))
     }
 

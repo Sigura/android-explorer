@@ -353,8 +353,7 @@ class SlideshowController(
         cancelWait()
         // Remember where the item on screen was left; going back or forward to it goes on from there.
         current?.let { old ->
-            val t = timing
-            if (t != null) nav.leave(old.path, shownMs(), t.showMs, positionOf(old))
+            if (timing != null) nav.leave(old.path, shownMs(), positionOf(old), meta?.durationMs)
             saveListened(old)
         }
         // An item that was shown to its end, or nearly, starts over instead of flashing by. One
