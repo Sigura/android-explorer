@@ -8,6 +8,8 @@ data class SortSpec(
     val by: SortBy = SortBy.DATE,
     val descending: Boolean = true,
     val foldersFirst: Boolean = true,
+    /** Favourite files: first after the folders (README §2, "Folder view"). */
+    val favourites: Set<String> = emptySet(),
 )
 
 /** A folder's own order, picked in its top bar (README §2, "Folder view"); `foldersFirst` stays global. */
@@ -25,8 +27,9 @@ object Sorting {
     }
 
     /**
-     * Folder view order (README §4): folders, then media, then other files, each group sorted by [spec].
-     * With `foldersFirst = false`, folders are mixed with the media group.
+     * Folder view order (README §4): folders, then favourite files, then media, then other files, each
+     * group sorted by [spec]. With `foldersFirst = false`, favourites come first and folders are mixed
+     * with the media group.
      */
     fun comparator(spec: SortSpec): Comparator<FileEntry> {
         val byName = Comparator<FileEntry> { a, b -> NaturalOrder.compare(a.name, b.name) }
@@ -37,7 +40,14 @@ object Sorting {
             SortBy.TYPE -> compareBy<FileEntry> { extension(it.name) }.then(byName)
         }
         val directed = if (spec.descending) key.reversed() else key
-        val group = compareBy<FileEntry> { if (spec.foldersFirst) it.group else minOf(it.group, 1) }
+        val group = compareBy<FileEntry> {
+            when {
+                spec.foldersFirst && it.isFolder -> 0
+                !it.isFolder && it.path in spec.favourites -> 1
+                spec.foldersFirst -> 1 + it.group
+                else -> 2 + minOf(it.group, 1)
+            }
+        }
         return group.then(directed)
     }
 

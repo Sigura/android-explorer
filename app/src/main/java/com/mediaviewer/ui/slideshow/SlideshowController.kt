@@ -182,10 +182,11 @@ class SlideshowController(
         listing.status.first { it != FolderListing.Status.LOADING }
         val media = listing.snapshot().filter { it.isMedia }
         val s = vm.settings.value
+        val sort = vm.folderSort.value
         val o = if (resume != null) {
-            SlideOrder(media, Sorting.comparator(vm.folderSort.value), resume.random, resume.seed, resume.pinnedFirst, startPath)
+            SlideOrder(media, Sorting.comparator(sort), resume.random, resume.seed, resume.pinnedFirst, startPath, favourites = sort.favourites)
         } else {
-            SlideOrder(media, Sorting.comparator(vm.folderSort.value), s.random, System.nanoTime(), if (s.random) startPath else null, startPath)
+            SlideOrder(media, Sorting.comparator(sort), s.random, System.nanoTime(), if (s.random) startPath else null, startPath, favourites = sort.favourites)
         }
         order = o
         known.addAll(media.map { it.path })

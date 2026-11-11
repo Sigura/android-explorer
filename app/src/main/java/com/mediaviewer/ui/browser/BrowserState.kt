@@ -206,6 +206,12 @@ class BrowserState(
 
     fun selectedEntries(): List<FileEntry> = entries.filter { it.path in selection }
 
+    /** Files of [list] that can be favourites: no folders; on a device, only one remembered by its serial number (todo §11.4). */
+    fun favouriteCandidates(list: List<FileEntry>): List<String> =
+        list.filter { !it.isFolder && (!remote || MtpPaths.isRememberedPath(it.path)) }.map { it.path }
+
+    fun toggleFavourites(list: List<FileEntry>) = vm.toggleFavouriteFiles(favouriteCandidates(list))
+
     fun dragSelectTo(root: Offset) {
         if (dragAnchor < 0) return
         var info = grid.layoutInfo

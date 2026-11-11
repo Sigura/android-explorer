@@ -197,8 +197,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (l == null) {
                     flowOf(null)
                 } else {
-                    combine(settings.map { it.sort }, settingsStore.folderSorts.map { it[l.path] }, l.hasImages) { global, own, images ->
-                        l to Sorting.effective(global, own, images)
+                    combine(
+                        settings.map { it.sort }, settingsStore.folderSorts.map { it[l.path] }, l.hasImages,
+                        settings.map { it.favouriteFiles }.distinctUntilChanged(),
+                    ) { global, own, images, favourites ->
+                        l to Sorting.effective(global, own, images).copy(favourites = favourites)
                     }
                 }
             }.distinctUntilChanged().collect { pair ->
@@ -462,6 +465,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             // Until an image is listed, the folder is ordered as one without images.
             val spec = Sorting.effective(settings.value.sort, settingsStore.folderSorts.value[path], hasImages = false)
+                .copy(favourites = settings.value.favouriteFiles)
             val remote = MtpPaths.isMtp(path)
             FolderListing(
                 path, viewModelScope, Sorting.comparator(spec), settings.value.showHidden,
@@ -746,6 +750,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleFavourite(path: String) {
         settingsStore.update { s ->
             s.copy(favourites = if (path in s.favourites) s.favourites - path else s.favourites + path)
+        }
+    }
+
+    /** Adds [paths] to the favourite files, or removes them when they all are favourites already. */
+    fun toggleFavouriteFiles(paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        settingsStore.update { s ->
+            s.copy(favouriteFiles = if (s.favouriteFiles.containsAll(paths)) s.favouriteFiles - paths.toSet() else s.favouriteFiles + paths)
         }
     }
 

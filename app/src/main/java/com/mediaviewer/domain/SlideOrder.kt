@@ -12,6 +12,9 @@ import kotlin.random.Random
  * and the name, `seed` + `pinnedFirst` + the current file are enough to rebuild exactly the same
  * order after a restart, even if files were added or deleted meanwhile (README §7.3).
  *
+ * Favourite files come first in both orders: [folderOrder] puts them there, and the random order
+ * shuffles them ahead of the rest (after the pinned file).
+ *
  * @param media media files in folder order (sorted by [folderOrder]).
  */
 class SlideOrder(
@@ -22,6 +25,7 @@ class SlideOrder(
     pinnedFirst: String?,
     startPath: String?,
     private val rng: Random = Random.Default,
+    private val favourites: Set<String> = emptySet(),
 ) {
     private val byName = media.toMutableList()
     private var order: MutableList<FileEntry> = mutableListOf()
@@ -146,7 +150,13 @@ class SlideOrder(
 
     private fun randomOrder(): Comparator<FileEntry> {
         val pinned = pinnedFirst
-        return compareBy<FileEntry> { if (it.path == pinned) 0 else 1 }
+        return compareBy<FileEntry> {
+            when {
+                it.path == pinned -> 0
+                it.path in favourites -> 1
+                else -> 2
+            }
+        }
             .thenBy { key(seed, it.name) }
             .thenComparator { a, b -> NaturalOrder.compare(a.name, b.name) }
     }
