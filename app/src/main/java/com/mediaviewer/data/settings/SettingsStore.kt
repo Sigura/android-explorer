@@ -54,6 +54,8 @@ data class AppSettings(
     val showHidden: Boolean = false,
     val theme: ThemeMode = ThemeMode.SYSTEM,
     val favourites: Set<String> = emptySet(),
+    /** Files kept at the top of their folder, after its folders, and first in its slideshow (README §2, "Folder view"). */
+    val favouriteFiles: Set<String> = emptySet(),
     /**
      * Cameras and phones seen before (todo §11.4), by device key (`MtpPaths.deviceKey`) → name:
      * recent folders and favourites on one show its name while it is unplugged.
@@ -156,6 +158,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val showHidden = booleanPreferencesKey("show_hidden")
         val theme = stringPreferencesKey("theme")
         val favourites = stringSetPreferencesKey("favourites")
+        val favouriteFiles = stringSetPreferencesKey("favourite_files")
         /** `key<TAB>name` per remembered device (todo §11.4). */
         val knownDevices = stringSetPreferencesKey("known_devices")
         val recentCount = intPreferencesKey("recent_count")
@@ -279,6 +282,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
             showHidden = p[K.showHidden] ?: d.showHidden,
             theme = enumOr(p[K.theme], d.theme),
             favourites = p[K.favourites] ?: emptySet(),
+            favouriteFiles = p[K.favouriteFiles] ?: emptySet(),
             knownDevices = p[K.knownDevices].orEmpty().mapNotNull { e -> e.split('\t', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }.toMap(),
             recentCount = (p[K.recentCount] ?: d.recentCount).coerceIn(1, MAX_RECENT),
             showNames = p[K.showNames] ?: d.showNames,
@@ -320,6 +324,7 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p[K.showHidden] = s.showHidden
         p[K.theme] = s.theme.name
         p[K.favourites] = s.favourites
+        p[K.favouriteFiles] = s.favouriteFiles
         p[K.knownDevices] = s.knownDevices.mapTo(HashSet()) { (k, name) -> k + "\t" + name.replace('\t', ' ') }
         p[K.recentCount] = s.recentCount
         p[K.showNames] = s.showNames

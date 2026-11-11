@@ -90,6 +90,24 @@ class SortingTest {
         assertEquals(listOf("dir", "b2.gif", "b10.jpg", "z.txt"), list.map { it.name })
     }
 
+    @Test fun favouriteFilesComeRightAfterFolders() {
+        val list = listOf(
+            e("z.txt", MediaType.OTHER),
+            e("b10.jpg", MediaType.IMAGE),
+            e("dir", MediaType.FOLDER),
+            e("b2.gif", MediaType.ANIMATED),
+            e("y.txt", MediaType.OTHER),
+        )
+        val favs = setOf("/d/z.txt", "/d/b10.jpg", "/d/dir")
+        val spec = SortSpec(SortBy.NAME, descending = false, favourites = favs)
+        // A favourite folder stays with the folders; favourite files of any kind come next, by name.
+        assertEquals(listOf("dir", "b10.jpg", "z.txt", "b2.gif", "y.txt"), list.sortedWith(Sorting.comparator(spec)).map { it.name })
+        assertEquals(
+            listOf("b10.jpg", "z.txt", "dir", "b2.gif", "y.txt"),
+            list.sortedWith(Sorting.comparator(spec.copy(foldersFirst = false))).map { it.name },
+        )
+    }
+
     @Test fun folderWithoutImagesSortsByName() {
         val global = SortSpec(SortBy.DATE, descending = true)
         val spec = Sorting.effective(global, own = null, hasImages = false)
@@ -118,6 +136,20 @@ class SlideOrderTest {
         assertEquals("f2.gif", o.next()?.name)
         assertEquals("f3.gif", o.next()?.name)
         assertEquals("f1.gif", o.next()?.name)
+    }
+
+    @Test fun favouritesPlayFirstInBothOrders() {
+        val favs = setOf("/d/f4.gif", "/d/f9.gif", "/d/f17.gif")
+        val list = media(20)
+        val byName = Sorting.comparator(SortSpec(SortBy.NAME, descending = false, favourites = favs))
+        val seq = SlideOrder(list.sortedWith(byName), byName, random = false, seed = 0, pinnedFirst = null, startPath = null, favourites = favs)
+        assertEquals(listOf("f4.gif", "f9.gif", "f17.gif", "f1.gif"), (0 until 4).map { seq.peek(it)!!.name })
+        // Random: the pinned file, then the favourites shuffled, then the rest shuffled; again in the next cycle.
+        val rnd = SlideOrder(list.sortedWith(byName), byName, random = true, seed = 7, pinnedFirst = "/d/f2.gif", startPath = "/d/f2.gif", rng = Random(3), favourites = favs)
+        assertEquals("f2.gif", rnd.current?.name)
+        assertEquals(favs, (1..3).map { rnd.peek(it)!!.path }.toSet())
+        repeat(20) { rnd.next() }
+        assertEquals(favs, (0..2).map { rnd.peek(it)!!.path }.toSet())
     }
 
     @Test fun randomCycleHasNoRepeats() {

@@ -422,6 +422,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
             sizePx, settings.cropMode, settings.cropThresholdPct, isTv, settings.showNames, desktopClicks(settings.mouseMode),
             firstFrameOnly = status == FolderListing.Status.LOADING,
             longVideoMs = if (hasPlayer) settings.longVideoMin * 60_000L else 0L,
+            favourites = settings.favouriteFiles,
         )
         LaunchedEffect(columns, maxHeight) {
             val rows = (maxHeight / (cellW * 0.75f)).toInt() + 3
@@ -485,7 +486,7 @@ fun FolderScreen(vm: AppViewModel, listing: FolderListing) {
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             if (browser.selectionMode) {
-                SelectionBar(browser, remote)
+                SelectionBar(browser, remote, settings.favouriteFiles)
             } else {
                 TopBar(
                     vm, listing.path,
@@ -823,7 +824,7 @@ private fun TileSizeSlider(tileDp: Int, width: Dp = 112.dp, onChange: (Int) -> U
 
 /** Contextual bar of selection mode (README §4.6). */
 @Composable
-private fun SelectionBar(browser: BrowserState, remote: Boolean) {
+private fun SelectionBar(browser: BrowserState, remote: Boolean, favourites: Set<String>) {
     val statusTop = topInset()
     Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -834,6 +835,14 @@ private fun SelectionBar(browser: BrowserState, remote: Boolean) {
             Text("${browser.selection.size} selected", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             TipIconButton("Select all (Ctrl+A)", onClick = browser::selectAll) { Icon(Icons.AutoMirrored.Rounded.PlaylistAddCheck, contentDescription = "Select all") }
             TipIconButton("Invert selection", onClick = browser::invert) { Icon(Icons.Rounded.SwapHoriz, contentDescription = "Invert selection") }
+            val favs = browser.favouriteCandidates(browser.selectedEntries())
+            if (favs.isNotEmpty()) {
+                val all = favourites.containsAll(favs)
+                val label = if (all) "Remove from favourites" else "Add to favourites"
+                TipIconButton(label, onClick = { browser.toggleFavourites(browser.selectedEntries()) }) {
+                    Icon(if (all) Icons.Rounded.Star else Icons.Rounded.StarBorder, contentDescription = label)
+                }
+            }
             // Device folders (todo §9): no share, the files aren't on this phone.
             if (!remote) {
                 TipIconButton("Share", onClick = { browser.share(browser.selectedEntries()) }) {

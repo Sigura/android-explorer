@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Downloading
@@ -123,6 +124,8 @@ data class TileConfig(
     val firstFrameOnly: Boolean = false,
     /** Videos longer than this open in an external player (README §3.11); 0 = off or no player installed. */
     val longVideoMs: Long = 0,
+    /** Favourite files (README §2, "Folder view"): a star on their tiles. */
+    val favourites: Set<String> = emptySet(),
 )
 
 private const val RESIZE_SETTLE_MS = 300L
@@ -355,6 +358,7 @@ fun TileFrame(
                 onDismiss = { menuAt = null },
             )
         }
+        if (!selectionMode && entry != null && entry.path in LocalTileConfig.current.favourites) FavouriteBadge()
         if (selectionMode && entry != null) {
             if (selected) Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)))
             Icon(
@@ -392,6 +396,11 @@ private fun TileMenu(entry: FileEntry, browser: BrowserState, offset: DpOffset, 
             if (!entry.isFolder && entry.type != MediaType.PARTIAL) Item("Open with…") { browser.openWith(entry) }
         }
         Item(if (entry.path in browser.selection) "Deselect" else "Select") { browser.select(entry) }
+        val favs = browser.favouriteCandidates(targets)
+        if (favs.isNotEmpty()) {
+            val all = LocalTileConfig.current.favourites.containsAll(favs)
+            Item(if (all) "Remove from favourites" else "Add to favourites") { browser.toggleFavourites(targets) }
+        }
         // Device folders (todo §9): no share or clipboard, the files aren't on this phone.
         if (!browser.remote) {
             Item(if (many) "Share ${targets.size} items" else "Share", enabled = files > 0) { browser.share(targets) }
@@ -455,6 +464,22 @@ private fun TileName(name: String, style: TextStyle, modifier: Modifier = Modifi
             modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1000, repeatDelayMillis = 1500),
         )
     }
+}
+
+/** Top-right star on a favourite file. */
+@Composable
+private fun BoxScope.FavouriteBadge() {
+    Icon(
+        Icons.Rounded.Star,
+        contentDescription = "Favourite",
+        tint = Color.White,
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(5.dp)
+            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+            .padding(2.dp)
+            .size(14.dp),
+    )
 }
 
 /** Bottom-left ↗: a tap opens this long video in another app (README §3.11). */
