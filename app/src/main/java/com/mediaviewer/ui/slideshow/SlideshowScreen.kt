@@ -256,9 +256,10 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
     }
     // The open menu only stops the timer; the video keeps playing.
     LaunchedEffect(c.paused) { if (c.current?.type == MediaType.VIDEO) players.current.playWhenReady = !c.paused }
-    LaunchedEffect(c.timing, c.single, c.generation) {
+    // A video that plays once loops too while the menu is open, and goes on when it next ends after it closes.
+    LaunchedEffect(c.timing, c.single, c.generation, c.menuOpen) {
         if (c.current?.type == MediaType.VIDEO) {
-            players.current.repeatMode = if (c.timing?.loop == true || c.single) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            players.current.repeatMode = if (c.timing?.loop == true || c.single || c.menuOpen) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         }
     }
     DisposableEffect(players) {
