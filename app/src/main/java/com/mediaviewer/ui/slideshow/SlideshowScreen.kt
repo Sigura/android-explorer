@@ -196,7 +196,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
                 }
                 Lifecycle.Event.ON_START -> {
                     c.onVisible(true)
-                    if (!c.paused && c.current?.type == MediaType.VIDEO) players.current.play()
+                    if (c.current?.type == MediaType.VIDEO) players.current.play()
                 }
                 else -> Unit
             }
@@ -232,7 +232,7 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             c.onFailed(e, ex.message ?: "read error")
             return@LaunchedEffect
         }
-        val prepared = players.show(uri, e.path, c.resumePositionMs, play = !c.paused)
+        val prepared = players.show(uri, e.path, c.resumePositionMs)
         // A prepared player is READY already: no state change will report it.
         val p = players.current
         if (prepared && p.playbackState == Player.STATE_READY) c.onReady(e, p.duration.takeIf { it > 0 }, p.videoSize.width, p.videoSize.height)
@@ -254,12 +254,11 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
             )
         }
     }
-    // The open menu only stops the timer; the video keeps playing.
-    LaunchedEffect(c.paused) { if (c.current?.type == MediaType.VIDEO) players.current.playWhenReady = !c.paused }
-    // A video that plays once loops too while the menu is open, and goes on when it next ends after it closes.
-    LaunchedEffect(c.timing, c.single, c.generation, c.menuOpen) {
+    // Pause and the open menu only stop the timer: a video that plays once loops meanwhile, and goes on
+    // when it next ends after the show runs again.
+    LaunchedEffect(c.timing, c.single, c.generation, c.menuOpen, c.paused) {
         if (c.current?.type == MediaType.VIDEO) {
-            players.current.repeatMode = if (c.timing?.loop == true || c.single || c.menuOpen) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            players.current.repeatMode = if (c.timing?.loop == true || c.single || c.menuOpen || c.paused) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         }
     }
     DisposableEffect(players) {
@@ -601,8 +600,8 @@ private fun PlayedGif(e: FileEntry, gif: SlideGif, c: SlideshowController, gifs:
             if (gifs[e.path] === gif) gifs.remove(e.path)
         }
     }
-    // Paused, the GIF stays on its frame and goes on from there.
-    LaunchedEffect(gif, c.paused) { gif.running.value = !c.paused }
+    // A prepared GIF waits on its first frame until its slide shows it.
+    LaunchedEffect(gif) { gif.running.value = true }
     // Also when the slide is brought back while it was still moving out: it isn't started again.
     LaunchedEffect(gif.state, c.generation) {
         when (gif.state) {

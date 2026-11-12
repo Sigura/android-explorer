@@ -43,7 +43,7 @@ class SlideGif(val file: File, val startMs: Long) {
     @Volatile var positionMs = startMs
         private set
 
-    /** False while the slideshow is paused: the frame on screen stays. */
+    /** False while prepared ahead of its slide: the first frame stays. */
     val running = MutableStateFlow(true)
 
     private var job: Job? = null
