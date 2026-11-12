@@ -173,7 +173,9 @@ class BrowserState(
     }
 
     fun share(list: List<FileEntry>) {
-        if (!remote) shareFiles(context, list.filter { !it.isFolder })
+        if (remote) return
+        clearSelection()
+        shareFiles(context, list.filter { !it.isFolder })
     }
 
     fun transfer(list: List<FileEntry>, move: Boolean) {
@@ -210,7 +212,10 @@ class BrowserState(
     fun favouriteCandidates(list: List<FileEntry>): List<String> =
         list.filter { !it.isFolder && (!remote || MtpPaths.isRememberedPath(it.path)) }.map { it.path }
 
-    fun toggleFavourites(list: List<FileEntry>) = vm.toggleFavouriteFiles(favouriteCandidates(list))
+    fun toggleFavourites(list: List<FileEntry>) {
+        clearSelection()
+        vm.toggleFavouriteFiles(favouriteCandidates(list))
+    }
 
     fun dragSelectTo(root: Offset) {
         if (dragAnchor < 0) return
