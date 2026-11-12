@@ -17,6 +17,8 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Star
@@ -128,6 +130,9 @@ fun SlideshowMenu(c: SlideshowController, vm: AppViewModel, modifier: Modifier =
                 MenuAction(c, Icons.Rounded.Delete, "Delete") { c.deleteCurrent() }
                 // 4. Back to folder view.
                 MenuAction(c, Icons.AutoMirrored.Rounded.ArrowBack, "Back to folder") { c.close() }
+                MenuAction(c, if (c.paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, if (c.paused) "Play" else "Pause") {
+                    c.paused = !c.paused
+                }
                 MenuButton(Icons.Rounded.Info, "File info") { showInfo = !showInfo }
                 // Device files aren't on this phone to share (as in the folder view).
                 if (!c.onDevice) MenuAction(c, Icons.Rounded.Share, "Share") { e?.let { shareFiles(ctx, listOf(it)) } }
