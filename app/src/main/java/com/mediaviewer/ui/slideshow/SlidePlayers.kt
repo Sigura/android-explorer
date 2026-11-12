@@ -75,7 +75,7 @@ class SlidePlayers(build: () -> ExoPlayer) {
      * The slide now shows [path] from [positionMs]. The spare becomes the slide's player when it
      * holds [path] (true); otherwise the on-screen player loads it, as with one player (false).
      */
-    fun show(uri: Uri, path: String, positionMs: Long, play: Boolean): Boolean {
+    fun show(uri: Uri, path: String, positionMs: Long): Boolean {
         val spare = 1 - onScreen
         // A spare that failed is not handed over: the slide's own player tries, and reports the error.
         val prepared = loaded[spare] == path && players[spare].playerError == null
@@ -98,7 +98,7 @@ class SlidePlayers(build: () -> ExoPlayer) {
             loaded[onScreen] = path
         }
         current.repeatMode = Player.REPEAT_MODE_OFF
-        current.playWhenReady = play
+        current.playWhenReady = true
         version++
         return prepared
     }
