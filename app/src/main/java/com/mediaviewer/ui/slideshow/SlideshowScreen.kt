@@ -16,6 +16,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
@@ -34,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
@@ -349,12 +351,14 @@ fun SlideshowScreen(vm: AppViewModel, listing: FolderListing, start: String, res
         if (c.paused && !c.menuOpen) {
             Icon(
                 Icons.Rounded.Pause,
-                contentDescription = "Paused",
+                contentDescription = "Paused, tap to play",
                 tint = Color.White.copy(alpha = 0.8f),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(16.dp)
+                    .clip(CircleShape)
+                    .clickable { c.paused = false }
                     .background(Color.Black.copy(alpha = 0.4f), CircleShape)
                     .padding(6.dp)
                     .size(28.dp),
